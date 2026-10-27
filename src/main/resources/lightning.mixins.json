@@ -1,0 +1,20 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.lightning.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "LevelMixin",
+    "MinecraftServerMixin",
+    "SimpleReloadInstanceMixin",
+    "ReloadableResourceManagerMixin"
+  ],
+  "client": [
+    "MinecraftMixin",
+    "client.WorldOpenFlowsMixin",
+    "client.ConnectScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

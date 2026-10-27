@@ -1,0 +1,35 @@
+name: Bug report
+description: Something isn't working right
+labels: [bug]
+body:
+  - type: input
+    id: mod-version
+    attributes:
+      label: Mod version
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft and NeoForge version
+      placeholder: e.g. 1.21.1, NeoForge 21.1.252
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log or crash report
+      description: Paste a link to your latest.log or crash report (for example from mclo.gs).
+  - type: textarea
+    id: mods
+    attributes:
+      label: Other mods or modpack
+      description: The modpack name, or other mods that might be involved.

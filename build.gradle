@@ -1,0 +1,101 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = mod_version
+group = 'dev.lightning'
+base { archivesName = 'lightning' }
+
+java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+
+// In-game tests (GameTest server). Kept out of the mod jar.
+sourceSets {
+    gametest {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+neoForge {
+    version = project.neo_version
+    runs {
+        client { client() }
+        clientSmokeWorld {
+            client()
+            systemProperty 'lightning.smokeWorld', 'true'
+            programArguments.addAll('--quickPlaySingleplayer', 'smoke')
+            gameDirectory = project.file('run/smoke')
+        }
+        clientShots {
+            client()
+            systemProperty 'lightning.smokeWorld', 'true'
+            systemProperty 'lightning.smokeShots', 'true'
+            programArguments.addAll('--quickPlaySingleplayer', 'smoke', '--width', '1600', '--height', '900')
+            gameDirectory = project.file('run/smoke')
+        }
+        // Start-up and world-join capture test: hidden, muted window; records from the JVM's
+        // start into the test world, saves and quits.
+        clientStartup {
+            client()
+            systemProperty 'lightning.smokeStartup', 'true'
+            systemProperty 'lightning.startup', 'join,5,quit'
+            systemProperty 'testharness.background', 'true'
+            jvmArgument '-XX:StartFlightRecording=name=lightning,settings=profile,class-loading=true'
+            programArguments.addAll('--quickPlaySingleplayer', 'smoke')
+            gameDirectory = project.file('run/smoke')
+        }
+        clientSmoke {
+            client()
+            systemProperty 'lightning.smoke', 'true'
+            gameDirectory = project.file('run/smoke')
+        }
+        server { server(); programArgument '--nogui' }
+        gameTestServer {
+            type = "gameTestServer"
+            sourceSet = sourceSets.gametest
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'lightning'
+            gameDirectory = project.file('run/gametest')
+        }
+        configureEach { logLevel = org.slf4j.event.Level.INFO }
+    }
+    mods {
+        lightning {
+            sourceSet(sourceSets.main)
+            sourceSet(sourceSets.gametest)
+        }
+    }
+    addModdingDependenciesTo(sourceSets.gametest)
+    unitTest {
+        enable()
+        testedMod = mods.lightning
+    }
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.3'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    maxHeapSize = '2g'
+    systemProperty 'lightning.testOutput', layout.buildDirectory.get().asFile.path
+    systemProperty 'lightning.jfrRepro', providers.gradleProperty('jfrRepro').getOrElse('')
+    testLogging { exceptionFormat = 'full'; showStandardStreams = true }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:unchecked', '-Xlint:deprecation']
+}
+
+processResources {
+    def props = [mod_version: mod_version, minecraft_version: minecraft_version, neo_version: neo_version]
+    inputs.properties props
+    filesMatching('META-INF/neoforge.mods.toml') { expand props }
+}
+
+jar {
+    from(files('LICENSE', 'COPYING')) { into('META-INF') }
+}

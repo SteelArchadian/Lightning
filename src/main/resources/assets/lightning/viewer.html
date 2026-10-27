@@ -1,0 +1,1131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lightning report</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #dfe3e8; --soft: #eef1f4;
+  --accent: #c27c00; --accent-ink: #7a4d00; --high: #c0362c; --medium: #b86e00; --low: #3d6fb6; --info: #5d6673;
+  --gpu: #7b4fd6; --sel: #fff1cc; --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --panel: #191d22; --ink: #e6e9ed; --muted: #98a2ae; --line: #2b3138; --soft: #20252b;
+    --accent: #f0a91a; --accent-ink: #ffd27a; --high: #ff6b5e; --medium: #f0a52a; --low: #74a7f2; --info: #98a2ae;
+    --gpu: #b28cff; --sel: #3a3020; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --panel: #191d22; --ink: #e6e9ed; --muted: #98a2ae; --line: #2b3138; --soft: #20252b;
+  --accent: #f0a91a; --accent-ink: #ffd27a; --high: #ff6b5e; --medium: #f0a52a; --low: #74a7f2; --info: #98a2ae;
+  --gpu: #b28cff; --sel: #3a3020; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+header h1 .bolt { color: var(--accent); font-size: 20px; }
+header .meta { color: var(--muted); font-size: 13px; }
+nav { display: flex; gap: 2px; flex-wrap: wrap; margin-left: auto; }
+nav button { background: none; border: 0; color: var(--muted); padding: 6px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
+nav button:hover { background: var(--soft); color: var(--ink); }
+nav button.on { background: var(--soft); color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+main { padding: 16px 20px 60px; max-width: 1500px; margin: 0 auto; }
+section.tab { display: none; }
+section.tab.on { display: block; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.card h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.hint { color: var(--muted); font-size: 12.5px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: 12px; }
+.contenders { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.contender { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.contender .rank { color: var(--muted); font-size: 12px; font-weight: 600; }
+.contender .ct { font-size: 16px; font-weight: 650; line-height: 1.3; }
+.contender .cs { font-size: 14px; color: var(--accent-ink); font-weight: 600; }
+.contender .cw { font-size: 13.5px; }
+.contender .ctry { font-size: 13px; color: var(--muted); }
+.contender a { color: var(--accent-ink); cursor: pointer; font-size: 13px; font-weight: 600; margin-top: auto; }
+.lead { font-size: 15px; margin: 4px 0 14px; color: var(--muted); }
+.finding { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.finding:first-of-type { border-top: 0; }
+.sev { font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; text-align: center; align-self: start; color: #fff; }
+.sev.high { background: var(--high); } .sev.medium { background: var(--medium); } .sev.low { background: var(--low); } .sev.info { background: var(--info); }
+.finding .t { font-weight: 600; } .finding .b { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.finding a { color: var(--accent-ink); cursor: pointer; font-size: 12.5px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--panel); }
+th:first-child, td:first-child { text-align: left; }
+td.name { white-space: normal; word-break: break-word; font-family: var(--mono); font-size: 12.5px; }
+tr.sel td { background: var(--sel); }
+tbody tr:hover td { background: var(--soft); cursor: default; }
+.scroll { max-height: 560px; overflow: auto; }
+.twist { display: inline-block; width: 14px; color: var(--muted); cursor: pointer; }
+.bar { display: inline-block; height: 8px; background: var(--accent); border-radius: 2px; vertical-align: middle; opacity: .8; }
+.gpuc { color: var(--gpu); }
+.row { display: flex; gap: 14px; flex-wrap: wrap; }
+.row > .card { flex: 1 1 420px; min-width: 0; }
+select, input[type=search] { font: inherit; padding: 4px 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; }
+.controls { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+canvas { width: 100%; display: block; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+#tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; max-width: 520px; box-shadow: 0 4px 16px rgba(0,0,0,.18); display: none; z-index: 20; white-space: pre-wrap; }
+pre.md { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; background: var(--soft); padding: 12px; border-radius: 8px; max-height: 70vh; overflow: auto; }
+.pill { display: inline-block; padding: 1px 6px; border-radius: 10px; background: var(--soft); font-size: 11.5px; color: var(--muted); margin-left: 6px; }
+.btn { font: inherit; padding: 5px 10px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 6px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+#drop { text-align: center; padding: 80px 20px; color: var(--muted); }
+#drop.hot { background: var(--sel); }
+.empty { color: var(--muted); padding: 12px 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.spikes { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.spikes button { font: 12px var(--mono); padding: 3px 7px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); border-radius: 5px; cursor: pointer; }
+.spikes button.on { border-color: var(--accent); background: var(--sel); }
+@media (max-width: 700px) { main { padding: 12px; } header { padding: 10px 12px; } th, td { padding: 3px 5px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="bolt">⚡</span> Lightning <span class="meta" id="hdr"></span></h1>
+  <nav id="nav"></nav>
+</header>
+<main id="main">
+  <div id="drop">Loading…</div>
+</main>
+<div id="tip"></div>
+<script id="lightning-data" type="application/octet-stream">__LIGHTNING_DATA__</script>
+<script>
+"use strict";
+// ---------------------------------------------------------------------------------------------
+// Loading: embedded gzip+base64 data, or a .lightning archive dropped onto the page.
+// ---------------------------------------------------------------------------------------------
+const $ = (s, el = document) => el.querySelector(s);
+const h = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "html") e.innerHTML = v; else if (v !== undefined && v !== null) e.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) e.append(kid.nodeType ? kid : String(kid));
+  return e;
+};
+async function inflate(bytes, format) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function fromArchive(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("Not a .lightning archive");
+  let p = dv.getUint32(eocd + 16, true);
+  const n = dv.getUint16(eocd + 10, true);
+  for (let i = 0; i < n; i++) {
+    const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true), extra = dv.getUint16(p + 30, true), comment = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nameLen));
+    if (name === "profile.json") {
+      const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      const raw = u8.subarray(start, start + size);
+      const data = method === 0 ? raw : await inflate(raw, "deflate-raw");
+      return JSON.parse(new TextDecoder().decode(data));
+    }
+    p += 46 + nameLen + extra + comment;
+  }
+  throw new Error("profile.json not found in archive");
+}
+async function load() {
+  const text = $("#lightning-data").textContent.trim();
+  if (text && !text.startsWith("__")) {
+    try {
+      const bytes = Uint8Array.from(atob(text), c => c.charCodeAt(0));
+      const json = new TextDecoder().decode(await inflate(bytes, "gzip"));
+      return start(JSON.parse(json));
+    } catch (e) { $("#drop").textContent = "Could not read the embedded capture: " + e.message; return; }
+  }
+  const drop = $("#drop");
+  drop.innerHTML = "";
+  drop.append(h("p", {}, "Drop a ", h("b", {}, ".lightning"), " file here, or "),
+    h("input", { type: "file", accept: ".lightning,.zip", onchange: e => openFile(e.target.files[0]) }));
+}
+async function openFile(file) {
+  try { start(await fromArchive(await file.arrayBuffer())); } catch (e) { $("#drop").textContent = e.message; }
+}
+document.addEventListener("dragover", e => { e.preventDefault(); $("#drop")?.classList.add("hot"); });
+document.addEventListener("drop", e => { e.preventDefault(); if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]); });
+
+// ---------------------------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------------------------
+let D; // profile
+const fmtMs = us => { const ms = us / 1000; return ms >= 100 ? ms.toFixed(0) : ms >= 10 ? ms.toFixed(1) : ms >= 1 ? ms.toFixed(2) : ms.toFixed(3); };
+const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n * 100) / 100);
+const fmtB = b => b >= 1 << 30 ? (b / (1 << 30)).toFixed(2) + " GB" : b >= 1 << 20 ? (b / (1 << 20)).toFixed(0) + " MB" : (b / 1024).toFixed(0) + " KB";
+const fmtS = us => (us / 1e6).toFixed(us < 1e7 ? 2 : 1) + " s";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const PALETTE = ["#3b82c4", "#d9822b", "#4caf7a", "#c44f6a", "#8a6fd1", "#2fa8a8", "#b8a032", "#7a8794", "#d16fb5", "#5b9e3c", "#c46a3b", "#4f6fd1"];
+const hue = s => { let x = 0; for (const c of s) x = (x * 31 + c.charCodeAt(0)) | 0; return x; };
+const ownerColor = o => !o ? "#8a939e" : o === "java" ? "#9aa3ad" : o === "minecraft" ? "#5f9e4f" : o === "neoforge" ? "#d08a2e" : o === "lightning" ? "#e0b000" : o === "library" ? "#a8a8b8" : `hsl(${Math.abs(hue(o)) % 360} 55% 55%)`;
+const tip = $("#tip");
+function showTip(e, text) { tip.textContent = text; tip.style.display = "block"; const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8); tip.style.left = x + "px"; tip.style.top = Math.min(e.clientY + 14, innerHeight - tip.offsetHeight - 8) + "px"; }
+function hideTip() { tip.style.display = "none"; }
+function canvas(el, height) {
+  const c = el.tagName === "CANVAS" ? el : el.appendChild(h("canvas"));
+  const dpr = devicePixelRatio || 1, w = c.clientWidth || c.parentElement.clientWidth;
+  c.style.height = height + "px"; c.width = Math.round(w * dpr); c.height = Math.round(height * dpr);
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { c, g, w, h: height };
+}
+function onWidth(el, fn) {
+  let last = -1;
+  new ResizeObserver(entries => { const w = Math.round(entries[0].contentRect.width); if (w !== last) { if (last >= 0) fn(); last = w; } }).observe(el);
+}
+function sortable(table, rows, columns, render) {
+  let key = columns.findIndex(c => c.sort === "desc"), dir = -1;
+  if (key < 0) key = 1;
+  const head = h("tr", {}, columns.map((c, i) => h("th", { title: c.title || "", onclick: () => { dir = key === i ? -dir : -1; key = i; draw(); } }, c.label)));
+  const body = h("tbody");
+  table.append(h("thead", {}, head), body);
+  function draw() {
+    const get = columns[key].value;
+    rows.sort((a, b) => { const x = get(a), y = get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir; });
+    body.innerHTML = "";
+    for (const r of rows.slice(0, 1000)) body.append(render(r));
+  }
+  draw();
+}
+function nameOf(i) { return i < 0 ? "(thread)" : D.names[i] ?? "?"; }
+
+// ---------------------------------------------------------------------------------------------
+// Model preparation
+// ---------------------------------------------------------------------------------------------
+function prepare() {
+  for (const t of D.threads) {
+    const tr = t.tree, n = tr.parent.length;
+    tr.children = Array.from({ length: n }, () => []);
+    tr.depth = new Int16Array(n);
+    for (let i = 1; i < n; i++) { tr.children[tr.parent[i]].push(i); tr.depth[i] = tr.depth[tr.parent[i]] + 1; }
+    tr.path = i => { const parts = []; for (let x = i; x > 0; x = tr.parent[x]) parts.push(nameOf(tr.name[x])); return parts.reverse().join(" › "); };
+    if (t.ticks) {
+      const k = t.ticks, valid = k.duration.filter(d => d >= 0).sort((a, b) => a - b);
+      t.count = valid.length;
+      t.pct = q => valid.length ? valid[Math.min(valid.length - 1, Math.ceil(q * valid.length) - 1)] : 0;
+      t.mean = valid.reduce((a, b) => a + b, 0) / Math.max(1, valid.length);
+    }
+  }
+  D.render = D.threads.find(t => t.role === "render");
+  D.server = D.threads.find(t => t.role === "server");
+  if (D.jvm && D.jvm.cpuTree) {
+    const f = D.jvm.cpuTree, n = f.parent.length;
+    f.children = Array.from({ length: n }, () => []);
+    for (let i = 1; i < n; i++) f.children[f.parent[i]].push(i);
+  }
+  // Server work per tick = duration minus the idle wait.
+  if (D.server && D.server.ticks) {
+    const t = D.server, k = t.ticks, wait = t.tree.name.findIndex((nm, i) => i > 0 && t.tree.parent[i] === 0 && nameOf(nm) === "nextTickWait");
+    t.work = k.duration.map((d, i) => {
+      if (d < 0) return -1;
+      let w = 0;
+      for (let b = k.breakdownStart[i]; b < k.breakdownStart[i + 1]; b++) if (k.breakdownNode[b] === wait) w += k.breakdownUs[b];
+      return d - w;
+    });
+    const valid = t.work.filter(x => x >= 0).sort((a, b) => a - b);
+    t.workPct = q => valid.length ? valid[Math.min(valid.length - 1, Math.ceil(q * valid.length) - 1)] : 0;
+    t.workMean = valid.reduce((a, b) => a + b, 0) / Math.max(1, valid.length);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// App shell
+// ---------------------------------------------------------------------------------------------
+let TABS = [["overview", "Overview"], ["loading", "Loading"], ["frames", "Frames & ticks"], ["sections", "Sections"], ["world", "World"], ["cpu", "JVM CPU"], ["memory", "Memory"], ["threads", "Threads & pauses"], ["logs", "Logs"], ["brief", "Brief"], ["capture", "Capture"]];
+const built = {};
+function start(data) {
+  D = data;
+  if (!D.loading) TABS = TABS.filter(t => t[0] !== "loading");
+  prepare();
+  const env = D.environment || {};
+  $("#hdr").textContent = `${new Date(D.startedAt).toLocaleString()} · ${fmtS(D.durationUs)} · ${env.context || ""}`;
+  document.title = "Lightning · " + D.id;
+  const main = $("#main"); main.innerHTML = "";
+  const nav = $("#nav"); nav.innerHTML = "";
+  for (const [id, label] of TABS) {
+    main.append(h("section", { class: "tab", id: "tab-" + id }));
+    nav.append(h("button", { "data-tab": id, onclick: () => go(id) }, label));
+  }
+  go(location.hash.slice(1).split(":")[0] || "overview");
+}
+function go(id, arg) {
+  if (!TABS.find(t => t[0] === id)) id = "overview";
+  for (const b of $("#nav").children) b.classList.toggle("on", b.dataset.tab === id);
+  for (const s of document.querySelectorAll("section.tab")) s.classList.toggle("on", s.id === "tab-" + id);
+  const el = $("#tab-" + id);
+  if (!built[id]) { built[id] = true; try { VIEWS[id](el, arg); } catch (e) { el.append(h("div", { class: "card" }, "This view failed: " + e.message)); console.error(e); } }
+  else if (arg && VIEWS[id].focus) VIEWS[id].focus(arg);
+  history.replaceState(null, "", "#" + id);
+}
+function follow(link) {
+  if (!link) return;
+  const [tab, arg] = link.split(/:(.*)/);
+  const map = { spikes: "frames", allocations: "memory", jvm: "threads", threads: "threads" };
+  go(map[tab] || tab, arg);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------------------------
+const VIEWS = {};
+
+VIEWS.overview = el => {
+  if (D.contenders && D.contenders.length) {
+    el.append(h("h2", { style: "margin:4px 0 2px;font-size:20px" }, "Your biggest contenders"),
+      h("div", { class: "lead" }, "What is costing your game the most in this recording, biggest first. Click through for the evidence; the tabs above have every detail."));
+    const grid = h("div", { class: "contenders" });
+    D.contenders.forEach((c, i) => grid.append(h("div", { class: "contender" },
+      h("div", { class: "rank" }, "#" + (i + 1)),
+      h("div", { class: "ct" }, c.title),
+      h("div", { class: "cs" }, c.size),
+      h("div", { class: "cw" }, c.why),
+      h("div", { class: "ctry" }, h("b", {}, "Try: "), c.try),
+      h("a", { onclick: () => follow(c.link) }, "Show me →"))));
+    el.append(grid);
+  } else {
+    el.append(h("div", { class: "lead" }, "Nothing stood out as a big cost in this recording."));
+  }
+  el.append(h("h3", {}, "At a glance"));
+  const kpis = h("div", { class: "kpis" });
+  const add = (v, l, title) => kpis.append(h("div", { class: "kpi", title: title || "" }, h("div", { class: "v" }, v), h("div", { class: "l" }, l)));
+  const r = D.render, s = D.server;
+  if (r && r.count) {
+    add((r.count / (D.durationUs / 1e6)).toFixed(0), "frames per second (mean)");
+    add(fmtMs(r.pct(0.5)) + " ms", "median frame time");
+    add(fmtMs(r.pct(0.99)) + " ms", "99th percentile frame", "1 in 100 frames is slower than this");
+    const gpu = r.ticks.gpu.filter(x => x >= 0).sort((a, b) => a - b);
+    if (gpu.length) add(fmtMs(gpu[Math.floor(gpu.length / 2)]) + " ms", "median GPU time per frame");
+  }
+  if (s && s.work) {
+    add(fmtMs(s.workPct(0.5)) + " ms", "median server tick work", "Work per tick, excluding the wait for the next tick");
+    add(fmtMs(s.workPct(0.95)) + " ms", "95th percentile tick", "Budget is 50 ms per tick at 20 TPS");
+  }
+  if (D.metrics && D.metrics.length) {
+    const peak = Math.max(...D.metrics.map(m => m[1])), max = D.metrics[0][3];
+    add(fmtB(peak), `peak heap of ${fmtB(max)}`);
+  }
+  if (D.jvm && D.jvm.allocationStalls && D.jvm.allocationStalls.length) add(fmtMs(D.jvm.allocationStalls.reduce((a, p) => a + p[1], 0)) + " ms", "allocation stalls");
+  el.append(kpis);
+
+  if (D.phases && D.phases.length) {
+    const t = h("table");
+    sortable(t, D.phases.slice(), [{ label: "Phase", value: r => r.from, sort: "desc" }, { label: "seconds", value: r => r.to - r.from }, { label: "FPS", value: r => r.fps }, { label: "frame p50 ms", value: r => r.frameP50 }, { label: "frame p99 ms", value: r => r.frameP99 }, { label: "tick p50 ms", value: r => r.tickP50 }, { label: "memory waits", value: r => r.stalls }, { label: "alloc MB/s", value: r => r.allocMBps }, { label: "in use MB", value: r => r.liveP50 }],
+      r => h("tr", {}, h("td", { class: "name" }, r.label), h("td", {}, ((r.to - r.from) / 1e6).toFixed(0)), h("td", {}, r.fps.toFixed(0)), h("td", {}, fmtMs(r.frameP50)), h("td", {}, fmtMs(r.frameP99)), h("td", {}, fmtMs(r.tickP50)), h("td", {}, `${r.stalls} (${fmtMs(r.stallUs)} ms)`), h("td", {}, r.allocMBps.toFixed(0)), h("td", {}, (r.liveP50 / 1048576).toFixed(0))));
+    el.append(h("div", { class: "card" }, h("h2", {}, "Phases"), h("div", { class: "hint" }, "Split at each /lightning mark."), t));
+  }
+  const card = h("div", { class: "card" }, h("h2", {}, "All findings (detailed)"));
+  if (!D.findings.length) card.append(h("div", { class: "empty" }, "Nothing notable was found."));
+  for (const f of D.findings) {
+    card.append(h("div", { class: "finding" },
+      h("span", { class: "sev " + f.severity }, f.severity),
+      h("div", {}, h("div", { class: "t" }, f.title), h("div", {}, f.detail),
+        h("div", { class: "b" }, f.basis, f.link ? [" · ", h("a", { onclick: () => follow(f.link) }, "show evidence →")] : null))));
+  }
+  el.append(card);
+  if (r && r.ticks) {
+    const c = h("div", { class: "card" }, h("h2", {}, "Frame time over the capture"), h("div", { class: "hint" }, "Stacked by where the render thread spent each frame. Click the Frames tab to inspect individual spikes."));
+    el.append(c);
+    frameChart(c, r, 220, null);
+  }
+};
+
+// Category per breakdown node: top-level sections, with "render" split into its children.
+function categories(t) {
+  const tr = t.tree, cats = new Map(), list = [];
+  const add = (node, label) => { if (!cats.has(node)) { cats.set(node, list.length); list.push(label); } };
+  for (const c of tr.children[0]) {
+    const top = nameOf(tr.name[c]);
+    if ((top === "render" || top === "gameRenderer") && tr.children[c].length && t.role === "render") { for (const g of tr.children[c]) add(g, nameOf(tr.name[g])); add(c, top + " (own)"); }
+    else if (nameOf(tr.name[c]) === "tick" && t.role === "server" && tr.children[c].length) { for (const g of tr.children[c]) add(g, "tick › " + nameOf(tr.name[g])); add(c, "tick (own)"); }
+    else add(c, nameOf(tr.name[c]));
+  }
+  // order by total time
+  const totals = list.map(() => 0);
+  for (const [node, idx] of cats) totals[idx] += node === 0 ? 0 : tr.self[node] + (cats.has(tr.parent[node]) ? 0 : tr.total[node] - tr.self[node]);
+  return { cats, list, color: i => PALETTE[i % PALETTE.length] };
+}
+function perTickCategories(t, cat) {
+  const k = t.ticks, n = k.duration.length, m = cat.list.length;
+  const out = new Float32Array(n * m);
+  for (let i = 0; i < n; i++) {
+    for (let b = k.breakdownStart[i]; b < k.breakdownStart[i + 1]; b++) {
+      const node = k.breakdownNode[b], idx = cat.cats.get(node);
+      if (idx === undefined) continue;
+      let v = k.breakdownUs[b];
+      // a split parent counts only its own time
+      if (t.tree.children[node].some(c => cat.cats.has(c))) {
+        for (let b2 = k.breakdownStart[i]; b2 < k.breakdownStart[i + 1]; b2++) if (t.tree.parent[k.breakdownNode[b2]] === node && cat.cats.has(k.breakdownNode[b2])) v -= k.breakdownUs[b2];
+      }
+      out[i * m + idx] += Math.max(0, v);
+    }
+  }
+  return out;
+}
+function frameChart(container, t, height, onPick, opts = {}) {
+  const k = t.ticks, n = k.duration.length;
+  if (!n) return;
+  const cat = categories(t), m = cat.list.length, per = perTickCategories(t, cat);
+  const holder = h("div"); container.append(holder);
+  const legend = h("div", { class: "legend" }, cat.list.map((l, i) => h("span", {}, h("i", { style: `background:${cat.color(i)}` }), l)));
+  const hasGpu = k.gpu.some(x => x >= 0);
+  if (hasGpu) legend.append(h("span", {}, h("i", { style: `background:${css("--gpu")}` }), "GPU frame time"));
+  container.append(legend);
+  let picked = -1;
+  function draw() {
+    holder.innerHTML = "";
+    const { c, g, w } = canvas(holder, height);
+    const pad = { l: 42, r: 8, t: 8, b: 20 }, W = w - pad.l - pad.r, H = height - pad.t - pad.b;
+    const duration = D.durationUs;
+    const values = k.duration.filter(x => x >= 0).sort((a, b) => a - b);
+    const cap = Math.max(values[Math.floor(values.length * 0.995)] || 1, values[Math.floor(values.length / 2)] * 3 || 1) * 1.1;
+    const y = v => pad.t + H - Math.min(1, v / cap) * H;
+    g.fillStyle = css("--panel"); g.fillRect(0, 0, w, height);
+    // grid
+    g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.font = "11px system-ui"; g.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) { const v = cap * i / 4, yy = y(v); g.beginPath(); g.moveTo(pad.l, yy); g.lineTo(w - pad.r, yy); g.stroke(); g.fillText(fmtMs(v), 4, yy + 4); }
+    for (let i = 0; i <= 6; i++) { const x = pad.l + W * i / 6; g.fillText(fmtS(duration * i / 6), x - 12, height - 5); }
+    // per-pixel columns: the worst frame in each column, stacked by category
+    const cols = Math.max(1, Math.floor(W));
+    const colWorst = new Int32Array(cols).fill(-1);
+    for (let i = 0; i < n; i++) {
+      if (k.duration[i] < 0) continue;
+      const x = Math.min(cols - 1, Math.floor(k.start[i] / duration * cols));
+      if (colWorst[x] < 0 || k.duration[i] > k.duration[colWorst[x]]) colWorst[x] = i;
+    }
+    for (let x = 0; x < cols; x++) {
+      const i = colWorst[x]; if (i < 0) continue;
+      let acc = 0;
+      for (let cIdx = 0; cIdx < m; cIdx++) {
+        const v = per[i * m + cIdx]; if (!v) continue;
+        g.fillStyle = cat.color(cIdx); g.fillRect(pad.l + x, y(acc + v), 1, y(acc) - y(acc + v)); acc += v;
+      }
+      const rest = k.duration[i] - acc;
+      if (rest > 0) { g.fillStyle = css("--line"); g.fillRect(pad.l + x, y(acc + rest), 1, y(acc) - y(acc + rest)); }
+    }
+    if (hasGpu) {
+      g.strokeStyle = css("--gpu"); g.lineWidth = 1.2; g.beginPath(); let started = false;
+      const colGpu = new Float64Array(cols).fill(-1);
+      for (let i = 0; i < n; i++) { if (k.gpu[i] < 0) continue; const x = Math.min(cols - 1, Math.floor(k.start[i] / duration * cols)); colGpu[x] = Math.max(colGpu[x], k.gpu[i]); }
+      for (let x = 0; x < cols; x++) { if (colGpu[x] < 0) continue; const yy = y(colGpu[x]); if (!started) { g.moveTo(pad.l + x, yy); started = true; } else g.lineTo(pad.l + x, yy); }
+      g.stroke();
+    }
+    if (picked >= 0) { const x = pad.l + k.start[picked] / duration * W; g.strokeStyle = css("--accent"); g.lineWidth = 2; g.beginPath(); g.moveTo(x, pad.t); g.lineTo(x, pad.t + H); g.stroke(); }
+    c.onmousemove = e => {
+      const rect = c.getBoundingClientRect(), x = Math.floor(e.clientX - rect.left - pad.l);
+      const i = x >= 0 && x < cols ? colWorst[x] : -1;
+      if (i < 0) return hideTip();
+      const parts = cat.list.map((l, ci) => [l, per[i * m + ci]]).filter(p => p[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 8);
+      showTip(e, `${t.role === "server" ? "Tick" : "Frame"} at ${fmtS(k.start[i])}: ${fmtMs(k.duration[i])} ms` + (k.gpu[i] >= 0 ? ` (GPU ${fmtMs(k.gpu[i])} ms)` : "") + "\n" + parts.map(p => `${p[0]}: ${fmtMs(p[1])} ms`).join("\n") + (onPick ? "\nClick for detail" : ""));
+    };
+    c.onmouseleave = hideTip;
+    c.onclick = e => {
+      if (!onPick) return;
+      const rect = c.getBoundingClientRect(), x = Math.floor(e.clientX - rect.left - pad.l);
+      const i = x >= 0 && x < cols ? colWorst[x] : -1;
+      if (i >= 0) { picked = i; draw(); onPick(i); }
+    };
+  }
+  draw();
+  onWidth(container, draw);
+  return { pick: i => { picked = i; draw(); } };
+}
+
+// Loading captures (game start-up, world joins): steps, what each spent its time on, and why.
+const LOAD_COLORS = ["#3b82c4", "#d9822b", "#b8a032", "#8a939e", "#4caf7a", "#8a6fd1", "#c44f6a"];
+const secs = ms => (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + " s";
+VIEWS.loading = el => {
+  const L = D.loading;
+  const startup = L.kind === "startup";
+  el.append(h("h2", { style: "margin:4px 0 2px;font-size:20px" }, startup ? "Game start-up" : "World join"),
+    h("div", { class: "lead" }, startup ? "Every step from Java starting to the title screen (and into a world, if you joined one), how long each took, and what it spent its time on."
+      : "Every step from the click to the world showing, how long each took, and what it spent its time on."));
+  const kpis = h("div", { class: "kpis" });
+  const add = (v, l, title) => kpis.append(h("div", { class: "kpi", title: title || "" }, h("div", { class: "v" }, v), h("div", { class: "l" }, l)));
+  if (L.toTitleScreenMs !== undefined) add(secs(L.toTitleScreenMs), "until the title screen");
+  if (L.worldJoinMs !== undefined) add(secs(L.worldJoinMs), "world join (click to world)");
+  if (L.beforeModsMs !== undefined) add(secs(L.beforeModsMs), "before any mod's code ran", "Java, the mod loader finding mods, and loading Minecraft's code");
+  if (startup) add(secs(L.lightningLoadedMs - L.jvmStartMs), "when Lightning loaded", "Lightning's own detail starts here; earlier steps come from the logs and Java's recorder");
+  const main = (L.threads || []).find(t => t.main);
+  if (main && main.total) for (const k of ["Loading classes", "Waiting"]) if (main.total[k]) add(secs(main.total[k]), "main thread: " + k.toLowerCase());
+  el.append(kpis);
+
+  // Steps as one bar, with moments marked under it.
+  const phases = L.phases || [];
+  const total = phases.length ? phases[phases.length - 1].startMs + phases[phases.length - 1].ms : 1;
+  const bar = h("div", { class: "card" }, h("h2", {}, "Steps"), h("div", { class: "hint" }, "Each colour is one step; hover for details. Ticks underneath are moments (setup events, first frame)."));
+  const holder = h("div");
+  bar.append(holder);
+  el.append(bar);
+  const draw = () => {
+    holder.innerHTML = "";
+    const { c, g, w } = canvas(holder, 74);
+    const x = ms => 4 + (w - 8) * ms / total;
+    g.font = "12px system-ui"; g.textBaseline = "middle";
+    phases.forEach((p, i) => {
+      const x0 = x(p.startMs), x1 = x(p.startMs + p.ms);
+      g.fillStyle = PALETTE[i % PALETTE.length]; g.fillRect(x0, 6, Math.max(1, x1 - x0 - 1), 30);
+      const label = p.name + " " + secs(p.ms);
+      if (x1 - x0 > g.measureText(label).width + 8) { g.fillStyle = "#fff"; g.fillText(label, x0 + 4, 21); }
+    });
+    g.strokeStyle = css("--muted") || "#888";
+    for (const s of L.steps || []) if (!s.phase) { const sx = x(s.atMs); g.beginPath(); g.moveTo(sx, 40); g.lineTo(sx, 52); g.stroke(); }
+    g.fillStyle = css("--muted") || "#888"; g.textBaseline = "alphabetic";
+    for (let t = 0; t <= total; t += total > 120000 ? 30000 : total > 30000 ? 10000 : 5000) g.fillText((t / 1000).toFixed(0) + " s", Math.min(x(t), w - 30), 70);
+    c.onmousemove = e => {
+      const r = c.getBoundingClientRect(), mx = e.clientX - r.left;
+      const ms = (mx - 4) / (w - 8) * total;
+      const near = (L.steps || []).filter(s => !s.phase && Math.abs(x(s.atMs) - mx) < 4)[0];
+      if (near && e.clientY - r.top > 36) return showTip(e, near.name + " at " + secs(near.atMs));
+      const p = phases.find(p => ms >= p.startMs && ms < p.startMs + p.ms);
+      if (p) showTip(e, p.name + ": " + secs(p.ms) + " (from " + secs(p.startMs) + ")"); else hideTip();
+    };
+    c.onmouseleave = hideTip;
+  };
+  draw(); onWidth(holder, draw);
+
+  // Per step: time, what the main thread did, busiest mods.
+  const cats = L.categories || [];
+  const byPhase = new Map((main?.byPhase || []).map(p => [p.phase, p]));
+  const early = L.mainThreadSamplesByPhase || {};
+  const t = h("table");
+  sortable(t, phases.slice(), [{ label: "Step", value: r => r.startMs, sort: "desc" }, { label: "starts at", value: r => r.startMs }, { label: "seconds", value: r => r.ms },
+    { label: "main thread", value: r => 0, title: "What the main thread spent the step on (from Lightning's 10 ms samples)" }, { label: "busiest mods", value: r => 0 }],
+    r => {
+      const p = byPhase.get(r.name);
+      const mini = h("span", { style: "display:inline-flex;width:180px;height:10px;border-radius:2px;overflow:hidden;vertical-align:middle;background:var(--line)" });
+      let tipText = "";
+      if (p) { const sum = cats.reduce((a, k) => a + (p[k] || 0), 0) || 1; cats.forEach((k, i) => { if (p[k]) { mini.append(h("span", { style: "width:" + (100 * p[k] / sum) + "%;background:" + LOAD_COLORS[i] })); tipText += k + ": " + secs(p[k]) + "\n"; } }); }
+      const mods = p?.mods?.length ? p.mods.slice(0, 4).map(m => m.mod + " " + secs(m.ms)).join(", ")
+        : (early[r.name] || []).filter(o => !o.owner.startsWith("(")).slice(0, 4).map(o => o.owner + " " + o.sharePct + "%").join(", ");
+      return h("tr", {}, h("td", { class: "name" }, r.name), h("td", {}, secs(r.startMs)), h("td", {}, (r.ms / 1000).toFixed(1)),
+        h("td", { title: tipText }, p ? mini : h("span", { class: "hint" }, "before Lightning loaded")), h("td", { class: "name" }, mods));
+    });
+  el.append(h("div", { class: "card" }, h("h2", {}, "Step by step"),
+    h("div", { class: "hint" }, cats.map((k, i) => h("span", { style: "margin-right:12px" }, h("span", { class: "bar", style: "width:10px;background:" + LOAD_COLORS[i] }), " " + k))),
+    h("div", { class: "scroll" }, t)));
+
+  // Main thread over time.
+  if (main && main.timeline && main.timeline.length) {
+    const card = h("div", { class: "card" }, h("h2", {}, "Main thread over time"), h("div", { class: "hint" }, "What the main thread was doing, every " + main.bucketMs + " ms. It runs the loading steps one after another, so time not spent \"Running Java\" went to loading classes, waiting or the JVM."));
+    const box = h("div"); card.append(box); el.append(card);
+    const drawTl = () => {
+      box.innerHTML = "";
+      const { c, g, w } = canvas(box, 140);
+      const tl = main.timeline, bw = main.bucketMs, x = ms => 4 + (w - 8) * ms / total;
+      for (const row of tl) {
+        let y = 130;
+        for (let k = 0; k < cats.length; k++) { const v = row[k + 1]; if (!v) continue; const hgt = 120 * v / bw; g.fillStyle = LOAD_COLORS[k]; g.fillRect(x(row[0]), y - hgt, Math.max(1, x(row[0] + bw) - x(row[0])), hgt); y -= hgt; }
+      }
+      g.strokeStyle = css("--line") || "#ccc";
+      phases.forEach(p => { const px = x(p.startMs); g.beginPath(); g.moveTo(px, 4); g.lineTo(px, 132); g.stroke(); });
+      c.onmousemove = e => {
+        const r = c.getBoundingClientRect(), ms = ((e.clientX - r.left) - 4) / (w - 8) * total;
+        const row = tl.find(rw => ms >= rw[0] && ms < rw[0] + bw);
+        const p = phases.find(p => ms >= p.startMs && ms < p.startMs + p.ms);
+        if (!row) return hideTip();
+        showTip(e, secs(row[0]) + (p ? " · " + p.name : "") + "\n" + cats.map((k, i) => row[i + 1] ? k + ": " + row[i + 1] + " ms" : "").filter(Boolean).join("\n"));
+      };
+      c.onmouseleave = hideTip;
+    };
+    drawTl(); onWidth(box, drawTl);
+  }
+
+  // Reload listeners.
+  for (const rl of L.reloads || []) {
+    const top = rl.listeners.slice(0, 40), max = Math.max(1, ...top.map(l => l.ms));
+    const tb = h("table");
+    sortable(tb, top.slice(), [{ label: "Step", value: r => r.name }, { label: "total s", value: r => r.ms, sort: "desc" }, { label: "preparing s", value: r => r.prepareMs, title: "Background work, often several steps at once" }, { label: "applying s", value: r => r.applyMs, title: "On the main thread, one step after another" }, { label: "", value: r => r.ms }],
+      r => h("tr", {}, h("td", { class: "name" }, r.name), h("td", {}, (r.ms / 1000).toFixed(2)), h("td", {}, (r.prepareMs / 1000).toFixed(2)), h("td", {}, (r.applyMs / 1000).toFixed(2)), h("td", {}, h("span", { class: "bar", style: "width:" + Math.max(1, 160 * r.ms / max) + "px" }))));
+    el.append(h("div", { class: "card" }, h("h2", {}, rl.kind + " reload: " + secs(rl.ms) + (rl.phase ? " · during " + rl.phase : "")),
+      h("div", { class: "hint" }, "Minecraft's own timing of each loading step, slowest first. " + secs(rl.applyOnMainThreadMs) + " of it ran on the main thread."), h("div", { class: "scroll" }, tb)));
+  }
+
+  // Class loading.
+  const cl = L.classLoading;
+  if (cl) {
+    const card = h("div", { class: "card" }, h("h2", {}, "Loading game code: " + cl.classes.toLocaleString() + " classes, " + secs(cl.mainThreadMs) + " on the main thread"), h("div", { class: "hint" }, cl.note));
+    const row = h("div", { class: "row" });
+    if (cl.byMixinMod && cl.byMixinMod.length) {
+      const tb = h("table");
+      sortable(tb, cl.byMixinMod.slice(), [{ label: "Mod (mixins)", value: r => r.mod }, { label: "classes changed", value: r => r.classesChanged }, { label: "loading time s", value: r => r.ms, sort: "desc" }],
+        r => h("tr", {}, h("td", { class: "name" }, r.mod), h("td", {}, r.classesChanged), h("td", {}, (r.ms / 1000).toFixed(2))));
+      row.append(h("div", { class: "card" }, h("h3", {}, "Classes changed by each mod's mixins"), h("div", { class: "scroll" }, tb)));
+    }
+    if (cl.byClassOwner && cl.byClassOwner.length) {
+      const tb = h("table");
+      sortable(tb, cl.byClassOwner.slice(), [{ label: "Whose classes", value: r => r.owner }, { label: "classes", value: r => r.classes }, { label: "loading time s", value: r => r.ms, sort: "desc" }],
+        r => h("tr", {}, h("td", { class: "name" }, r.owner), h("td", {}, r.classes), h("td", {}, (r.ms / 1000).toFixed(2))));
+      row.append(h("div", { class: "card" }, h("h3", {}, "By whose classes they are"), h("div", { class: "scroll" }, tb)));
+    }
+    card.append(row);
+    if (cl.slowest && cl.slowest.length) {
+      const tb = h("table");
+      sortable(tb, cl.slowest.slice(), [{ label: "Class", value: r => r.class }, { label: "ms", value: r => r.ms, sort: "desc" }, { label: "at", value: r => r.atMs }, { label: "mixins from", value: r => r.mixinsFrom || "" }],
+        r => h("tr", {}, h("td", { class: "name" }, r.class + (r.mainThread ? "" : " (background)")), h("td", {}, r.ms.toFixed(1)), h("td", {}, secs(r.atMs)), h("td", { class: "name" }, r.mixinsFrom || "")));
+      card.append(h("h3", {}, "Slowest classes to load"), h("div", { class: "scroll" }, tb));
+    }
+    el.append(card);
+  }
+
+  // What each loading thread did.
+  for (const th of L.threads || []) {
+    const card = h("div", { class: "card" }, h("h2", {}, th.thread + (th.main ? " (main thread)" : "") + ": " + secs(th.sampledMs) + " sampled"));
+    const tot = th.total || {}, sum = Object.values(tot).reduce((a, b) => a + b, 0) || 1;
+    card.append(h("div", {}, cats.map((k, i) => tot[k] ? h("span", { style: "margin-right:14px" }, h("span", { class: "bar", style: "width:10px;background:" + LOAD_COLORS[i] }), " " + k + " " + secs(tot[k]) + " (" + (100 * tot[k] / sum).toFixed(0) + "%)") : null)));
+    const row = h("div", { class: "row" });
+    for (const k of cats) {
+      const list = th.what?.[k];
+      if (!list || !list.length || (tot[k] || 0) < 100) continue;
+      const tb = h("table");
+      sortable(tb, list.slice(), [{ label: "Where", value: r => r.frame }, { label: "s", value: r => r.ms, sort: "desc" }],
+        r => h("tr", {}, h("td", { class: "name" }, r.frame), h("td", {}, (r.ms / 1000).toFixed(2))));
+      row.append(h("div", { class: "card" }, h("h3", {}, k), h("div", { class: "scroll" }, tb)));
+    }
+    if (th.mods && th.mods.length) {
+      const tb = h("table");
+      sortable(tb, th.mods.slice(), [{ label: "Mod on the stack", value: r => r.mod }, { label: "s", value: r => r.ms, sort: "desc" }],
+        r => h("tr", {}, h("td", { class: "name" }, r.mod), h("td", {}, (r.ms / 1000).toFixed(2))));
+      row.append(h("div", { class: "card" }, h("h3", {}, "Mods"), h("div", { class: "scroll" }, tb)));
+    }
+    card.append(row);
+    el.append(card);
+  }
+
+  if (L.notes && L.notes.length) el.append(h("div", { class: "card" }, h("h2", {}, "About this data"), h("ul", {}, L.notes.map(n => h("li", { class: "hint" }, n)))));
+};
+
+VIEWS.frames = (el, arg) => {
+  for (const t of [D.render, D.server].filter(x => x && x.ticks)) {
+    const label = t.role === "render" ? "Frames (render thread)" : "Server ticks";
+    const card = h("div", { class: "card" }, h("h2", {}, label));
+    const stats = t.role === "render"
+      ? `${t.count} frames · median ${fmtMs(t.pct(.5))} ms · p95 ${fmtMs(t.pct(.95))} · p99 ${fmtMs(t.pct(.99))} · max ${fmtMs(t.pct(1))} ms`
+      : `${t.count} ticks · work median ${fmtMs(t.workPct(.5))} ms · p95 ${fmtMs(t.workPct(.95))} · max ${fmtMs(t.workPct(1))} ms (wait between ticks excluded)`;
+    card.append(h("div", { class: "hint" }, stats));
+    const detail = h("div");
+    const spikesBar = h("div", { class: "spikes" });
+    let chart;
+    const pick = i => {
+      chart.pick(i);
+      for (const b of spikesBar.children) b.classList.toggle("on", +b.dataset.tick === i);
+      spikeDetail(detail, t, i);
+    };
+    chart = frameChart(card, t, 240, pick);
+    card.append(h("h3", {}, "Slowest " + (t.role === "render" ? "frames" : "ticks")), spikesBar, detail);
+    for (const s of t.spikes) spikesBar.append(h("button", { "data-tick": s.tick, onclick: () => pick(s.tick) }, `${fmtS(s.start)} · ${fmtMs(s.duration)} ms`));
+    el.append(card);
+    if (t.spikes.length) pick(t.spikes[0].tick);
+  }
+  if (!el.children.length) el.append(h("div", { class: "card empty" }, "No frames or ticks were recorded."));
+};
+
+function spikeDetail(el, t, tick) {
+  el.innerHTML = "";
+  const k = t.ticks, s = t.spikes.find(x => x.tick === tick);
+  const tr = t.tree;
+  const typical = node => tr.calls[node] ? tr.total[node] / tr.calls[node] : 0;
+  el.append(h("div", { class: "hint" }, `${t.role === "server" ? "Tick" : "Frame"} at ${fmtS(k.start[tick])}: ${fmtMs(k.duration[tick])} ms` + (k.gpu[tick] >= 0 ? `, GPU ${fmtMs(k.gpu[tick])} ms` : "") + (s ? "" : " — only the summary breakdown is kept for frames that are not among the slowest.")));
+  if (!s) {
+    const rows = [];
+    for (let b = k.breakdownStart[tick]; b < k.breakdownStart[tick + 1]; b++) rows.push([k.breakdownNode[b], k.breakdownUs[b]]);
+    const table = h("table");
+    sortable(table, rows, [{ label: "Section", value: r => tr.path(r[0]) }, { label: "ms", value: r => r[1], sort: "desc" }, { label: "typical ms", value: r => typical(r[0]) }],
+      r => h("tr", {}, h("td", { class: "name" }, tr.path(r[0])), h("td", {}, fmtMs(r[1])), h("td", {}, fmtMs(typical(r[0])))));
+    el.append(table);
+    return;
+  }
+  // Gantt of every section in the frame/tick.
+  const maxDepth = Math.min(14, Math.max(0, ...s.depth) + 1), rowH = 18, height = maxDepth * rowH + 24;
+  const holder = h("div"); el.append(holder);
+  const cat = categories(t);
+  const topOf = node => { let x = node; while (x > 0 && !cat.cats.has(x)) x = tr.parent[x]; return cat.cats.get(x) ?? 0; };
+  const draw = () => {
+    holder.innerHTML = "";
+    const { c, g, w } = canvas(holder, height);
+    const W = w - 8, scale = W / Math.max(1, s.duration);
+    g.fillStyle = css("--panel"); g.fillRect(0, 0, w, height);
+    g.font = "11px system-ui";
+    const boxes = [];
+    for (let i = 0; i < s.node.length; i++) {
+      if (s.depth[i] >= maxDepth) continue;
+      const x = 4 + s.spanStart[i] * scale, bw = Math.max(1, s.spanDuration[i] * scale), y = s.depth[i] * rowH;
+      const slow = s.spanDuration[i] > 3 * typical(s.node[i]) && s.spanDuration[i] > 1000;
+      g.fillStyle = cat.color(topOf(s.node[i])); g.globalAlpha = slow ? 1 : 0.55;
+      g.fillRect(x, y + 1, bw, rowH - 2); g.globalAlpha = 1;
+      if (slow) { g.strokeStyle = css("--high"); g.lineWidth = 1.5; g.strokeRect(x + .5, y + 1.5, bw - 1, rowH - 3); }
+      if (bw > 40) { g.fillStyle = "#fff"; g.fillText(nameOf(tr.name[s.node[i]]).slice(0, Math.floor(bw / 6.5)), x + 3, y + 13); }
+      boxes.push([x, y, bw, i]);
+    }
+    const sy = maxDepth * rowH + 4;
+    for (let i = 0; i < s.sampleTime.length; i++) {
+      const x = 4 + s.sampleTime[i] * scale;
+      g.fillStyle = css("--accent"); g.fillRect(x - 1, sy, 3, 12);
+      boxes.push([x - 3, sy, 7, -1 - i]);
+    }
+    c.onmousemove = e => {
+      const rect = c.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const hit = boxes.filter(b => mx >= b[0] && mx <= b[0] + b[2] && my >= b[1] && my <= b[1] + rowH).pop();
+      if (!hit) return hideTip();
+      if (hit[3] < 0) {
+        const i = -1 - hit[3], leaf = s.sampleLeaf[i];
+        return showTip(e, `JVM sample at +${fmtMs(s.sampleTime[i])} ms in ${s.sampleNode[i] ? tr.path(s.sampleNode[i]) : "(no section)"}\n` + stackText(leaf, 18));
+      }
+      const i = hit[3], node = s.node[i];
+      showTip(e, `${tr.path(node)}\n${fmtMs(s.spanDuration[i])} ms (typically ${fmtMs(typical(node))} ms, p95 ${fmtMs(tr.p95[node])} ms)\nstarts at +${fmtMs(s.spanStart[i])} ms`);
+    };
+    c.onmouseleave = hideTip;
+  };
+  draw();
+  onWidth(el, draw);
+  el.append(h("div", { class: "hint" }, "Bars are sections nested by depth; outlined bars took over 3× their usual time. Yellow ticks underneath are JVM stack samples — hover for the stack.", s.truncated ? " (Too many sections in this frame: the rest are not shown.)" : ""));
+  // Coincident events.
+  const from = k.start[tick], to = from + k.duration[tick], ev = [];
+  const j = D.jvm || {};
+  for (const g2 of j.gc || []) if (g2[0] < to && g2[0] + g2[1] > from) ev.push(`GC ${g2[4]} (${g2[5]}): pauses ${fmtMs(g2[2])} ms`);
+  for (const p of j.allocationStalls || []) if (p[0] < to && p[0] + p[1] > from) ev.push(`Allocation stall on ${p[2]}: ${fmtMs(p[1])} ms`);
+  for (const p of j.vmOperations || []) if (p[0] < to && p[0] + p[1] > from) ev.push(`JVM ${p[3]} ${p[4]}: ${fmtMs(p[1])} ms`);
+  for (const p of j.blocking || []) if (p[0] < to && p[0] + p[1] > from) ev.push(`${p[2]} ${p[3]} on ${p[4]}: ${fmtMs(p[1])} ms\n${p[5].split("\n").slice(0, 4).join("\n")}`);
+  const L = D.logs || {};
+  if (L.times) for (let i = 0; i < L.times.length; i++) if (L.times[i] >= from && L.times[i] <= to) { const kd = L.kinds[L.kindIndex[i]]; ev.push(`${kd.level} ${kd.logger}: ${kd.message.slice(0, 160)}`); }
+  if (ev.length) el.append(h("h3", {}, "At the same time"), h("pre", { class: "md" }, ev.slice(0, 40).join("\n")), h("div", { class: "hint" }, "Coincidence in time, not proof of cause."));
+}
+function stackText(leaf, limit) {
+  const f = D.jvm && D.jvm.cpuTree; if (!f) return "";
+  const lines = [];
+  for (let x = leaf; x > 0 && f.parent[x] > 0; x = f.parent[x]) { const fr = f.frame[x]; lines.push(`${D.jvm.frames.label[fr]}  [${D.jvm.frames.owner[fr]}]`); if (lines.length >= limit) { lines.push("…"); break; } }
+  return lines.join("\n");
+}
+
+VIEWS.sections = (el, arg) => {
+  const threads = D.threads.filter(t => t.tree.parent.length > 1);
+  if (!threads.length) { el.append(h("div", { class: "card empty" }, "No profiler sections were recorded.")); return; }
+  const card = h("div", { class: "card" });
+  const select = h("select", {}, threads.map((t, i) => h("option", { value: i }, t.name + (t.role !== "other" ? ` (${t.role})` : ""))));
+  const unit = h("select", {}, h("option", { value: "tick" }, "per frame / tick"), h("option", { value: "total" }, "whole capture"));
+  const search = h("input", { type: "search", placeholder: "Filter sections…" });
+  card.append(h("h2", {}, "Section tree"), h("div", { class: "controls" }, "Thread", select, "Show", unit, search),
+    h("div", { class: "hint" }, "Exact times from profiler markers. Own = time not inside a nested section. Samples = JVM stack samples taken while this section was open (select a row to see them)."));
+  const tableWrap = h("div", { class: "scroll" });
+  card.append(tableWrap);
+  const side = h("div", { class: "card" }, h("h2", {}, "Inside the selected section"), h("div", { class: "empty" }, "Select a section."));
+  el.append(card, side);
+  const open = new Set([0]);
+  let t, selected = -1;
+  function render() {
+    t = threads[+select.value];
+    const tr = t.tree, perTick = unit.value === "tick" && t.ticks ? t.count : 0, div = perTick || 1;
+    const filter = search.value.toLowerCase();
+    const table = h("table");
+    const hasGpu = tr.gpuCalls.some(x => x > 0);
+    table.append(h("thead", {}, h("tr", {}, h("th", {}, "Section"), h("th", {}, perTick ? "calls/tick" : "calls"), h("th", {}, perTick ? "ms/tick" : "ms"), h("th", {}, perTick ? "own ms/tick" : "own ms"), h("th", { title: "Approximate 95th percentile of one call" }, "p95 ms"), h("th", {}, "max ms"), hasGpu ? h("th", { class: "gpuc" }, perTick ? "GPU ms/tick" : "GPU ms") : null, h("th", {}, "samples"))));
+    const body = h("tbody");
+    const rootTotal = tr.children[0].reduce((a, c) => a + tr.total[c], 0) || 1;
+    const visit = (node, depth) => {
+      const kids = tr.children[node].slice().sort((a, b) => tr.total[b] - tr.total[a]);
+      for (const c of kids) {
+        const name = nameOf(tr.name[c]);
+        const matches = !filter || tr.path(c).toLowerCase().includes(filter);
+        if (matches) {
+          const has = tr.children[c].length > 0, isOpen = open.has(c) || (filter && has);
+          const row = h("tr", { class: c === selected ? "sel" : "", onclick: () => { selected = c; showInside(c); render(); } },
+            h("td", { class: "name", style: `padding-left:${8 + depth * 16}px` },
+              h("span", { class: "twist", onclick: e => { e.stopPropagation(); open.has(c) ? open.delete(c) : open.add(c); render(); } }, has ? (isOpen ? "▾" : "▸") : ""),
+              name, " ", h("span", { class: "bar", style: `width:${Math.max(1, 60 * tr.total[c] / rootTotal)}px` })),
+            h("td", {}, fmtN(tr.calls[c] / div)), h("td", {}, fmtMs(tr.total[c] / div)), h("td", {}, fmtMs(tr.self[c] / div)),
+            h("td", {}, fmtMs(tr.p95[c])), h("td", {}, fmtMs(tr.max[c])),
+            hasGpu ? h("td", { class: "gpuc" }, tr.gpuCalls[c] ? fmtMs(tr.gpu[c] / div) : "") : null,
+            h("td", {}, tr.samples[c] || ""));
+          body.append(row);
+          if (isOpen) visit(c, depth + 1);
+        } else if (filter) visit(c, depth);
+      }
+    };
+    visit(0, 0);
+    table.append(body);
+    tableWrap.innerHTML = ""; tableWrap.append(table);
+  }
+  function showInside(node) {
+    side.innerHTML = "";
+    const tr = t.tree;
+    side.append(h("h2", {}, tr.path(node)));
+    side.append(h("div", { class: "kv" },
+      h("div", {}, "Calls"), h("div", {}, String(tr.calls[node])),
+      h("div", {}, "Total"), h("div", {}, fmtMs(tr.total[node]) + " ms"),
+      h("div", {}, "Own"), h("div", {}, fmtMs(tr.self[node]) + " ms"),
+      h("div", {}, "Mean per call"), h("div", {}, fmtMs(tr.total[node] / Math.max(1, tr.calls[node])) + " ms"),
+      h("div", {}, "p95 / max per call"), h("div", {}, fmtMs(tr.p95[node]) + " / " + fmtMs(tr.max[node]) + " ms"),
+      tr.gpuCalls[node] ? [h("div", {}, "GPU total / max"), h("div", { class: "gpuc" }, fmtMs(tr.gpu[node]) + " / " + fmtMs(tr.gpuMax[node]) + " ms")] : null));
+    // samples within this node and its descendants
+    const inside = new Set([node]);
+    const stack = [node]; while (stack.length) { const x = stack.pop(); for (const c of tr.children[x]) { inside.add(c); stack.push(c); } }
+    const ss = t.sectionStacks, byMethod = new Map(), byMod = new Map(), leaves = new Map();
+    let total = 0;
+    for (let i = 0; i < ss.length; i += 3) {
+      if (!inside.has(ss[i])) continue;
+      const leaf = ss[i + 1], count = ss[i + 2];
+      total += count;
+      leaves.set(leaf, (leaves.get(leaf) || 0) + count);
+      const f = D.jvm.cpuTree, fr = f.frame[leaf];
+      if (fr >= 0) { const lbl = D.jvm.frames.label[fr], own = D.jvm.frames.owner[fr]; byMethod.set(lbl, (byMethod.get(lbl) || [0, own])); byMethod.get(lbl)[0] += count; }
+      const owners = new Set();
+      for (let x = leaf; x > 0 && f.parent[x] > 0; x = f.parent[x]) { const o = D.jvm.frames.owner[f.frame[x]]; if (o && o !== "java") owners.add(o); }
+      for (const o of owners) byMod.set(o, (byMod.get(o) || 0) + count);
+    }
+    if (!total) { side.append(h("p", { class: "empty" }, D.jvm && D.jvm.cpuTree ? "No JVM samples landed inside this section (it may be short, or spend its time in native/GPU code)." : "JVM sampling was off for this capture.")); return; }
+    side.append(h("h3", {}, `${total} JVM samples inside`));
+    side.append(h("div", { class: "hint" }, "Owners on the sampled stacks (a sample counts for every owner on its stack):"));
+    side.append(h("div", { class: "legend" }, [...byMod].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([o, n]) => h("span", {}, h("i", { style: `background:${ownerColor(o)}` }), `${o} ${(100 * n / total).toFixed(0)}%`))));
+    const table = h("table");
+    sortable(table, [...byMethod], [{ label: "Method where the sample was (leaf)", value: r => r[0] }, { label: "owner", value: r => r[1][1] }, { label: "samples", value: r => r[1][0], sort: "desc" }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, r[1][1]), h("td", {}, r[1][0])));
+    side.append(h("h3", {}, "Leaf methods"), h("div", { class: "scroll", style: "max-height:300px" }, table));
+    const top = [...leaves].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    side.append(h("h3", {}, "Most common stacks"));
+    for (const [leaf, n] of top) side.append(h("pre", { class: "md" }, `${n} samples\n` + stackText(leaf, 30)));
+  }
+  select.onchange = () => { open.clear(); open.add(0); selected = -1; render(); };
+  unit.onchange = render;
+  search.oninput = render;
+  if (arg === "server" && D.server) select.value = threads.indexOf(D.server);
+  else if (D.render) select.value = threads.indexOf(D.render);
+  // open the main branches by default
+  t = threads[+select.value];
+  for (const c of t.tree.children[0]) { open.add(c); for (const g of t.tree.children[c]) if (t.tree.total[g] > 0.2 * t.tree.total[c]) open.add(g); }
+  render();
+};
+VIEWS.sections.focus = arg => {};
+
+VIEWS.world = (el, arg) => {
+  const levels = D.world || [];
+  if (!levels.length) { el.append(h("div", { class: "card empty" }, "No entity or block-entity ticks were recorded.")); return; }
+  const secs = D.durationUs / 1e6;
+  const select = h("select", {}, levels.map((l, i) => h("option", { value: i }, l.dimension + (l.client ? " (client)" : ""))));
+  const body = h("div");
+  el.append(h("div", { class: "card" }, h("div", { class: "controls" }, "Level", select), h("div", { class: "hint" }, "Every entity and block-entity tick is timed exactly. ms/s = milliseconds of tick time per second of capture (50 ms/s would fill a whole server tick budget at 20 TPS)."), body));
+  const render = () => {
+    const l = levels[+select.value];
+    body.innerHTML = "";
+    body.append(h("div", { class: "kpis" },
+      h("div", { class: "kpi" }, h("div", { class: "v" }, (l.entityUs / 1000 / secs).toFixed(2)), h("div", { class: "l" }, `entity ms/s · ${fmtN(l.entityTicks)} ticks`)),
+      h("div", { class: "kpi" }, h("div", { class: "v" }, (l.blockEntityUs / 1000 / secs).toFixed(2)), h("div", { class: "l" }, `block entity ms/s · ${fmtN(l.blockEntityTicks)} ticks`))));
+    // Chunk map
+    const chunks = l.chunks;
+    if (chunks.length) {
+      const mapCard = h("div", {}, h("h3", {}, "Chunk cost map"), h("div", { class: "hint" }, "Each square is a chunk; brighter = more tick time. Hover for what runs there."));
+      body.append(mapCard);
+      const xs = chunks.map(c => c.x), zs = chunks.map(c => c.z);
+      const minX = Math.min(...xs), maxX = Math.max(...xs), minZ = Math.min(...zs), maxZ = Math.max(...zs);
+      const spanX = maxX - minX + 1, spanZ = maxZ - minZ + 1;
+      const holder = h("div"); mapCard.append(holder);
+      const maxCost = Math.max(...chunks.map(c => c.entityUs + c.blockEntityUs));
+      const drawMap = () => {
+        holder.innerHTML = "";
+        const width = holder.clientWidth || 600, cell = Math.max(3, Math.min(24, Math.floor(width / spanX)));
+        const { c, g } = canvas(holder, Math.min(520, spanZ * cell + 2));
+        g.fillStyle = css("--soft"); g.fillRect(0, 0, width, spanZ * cell);
+        for (const ch of chunks) {
+          const v = Math.sqrt((ch.entityUs + ch.blockEntityUs) / maxCost);
+          g.fillStyle = `hsl(${40 - 40 * v} 90% ${30 + 35 * v}%)`;
+          g.fillRect((ch.x - minX) * cell, (ch.z - minZ) * cell, cell - 1, cell - 1);
+        }
+        c.onmousemove = e => {
+          const rect = c.getBoundingClientRect(), cx = Math.floor((e.clientX - rect.left) / cell) + minX, cz = Math.floor((e.clientY - rect.top) / cell) + minZ;
+          const ch = chunks.find(q => q.x === cx && q.z === cz);
+          if (!ch) return hideTip();
+          showTip(e, `Chunk ${ch.x}, ${ch.z} (blocks ${ch.x * 16}, ${ch.z * 16})\n${((ch.entityUs + ch.blockEntityUs) / 1000 / secs).toFixed(3)} ms/s\n` + ch.top.map(t => `${t[0]} ×${t[1]}: ${(t[3] / 1000 / secs).toFixed(3)} ms/s`).join("\n"));
+        };
+        c.onmouseleave = hideTip;
+      };
+      drawMap();
+      onWidth(mapCard, drawMap);
+    }
+    const grid = h("div", { class: "row" });
+    const typeCard = h("div", { class: "card" }, h("h2", {}, "By type"));
+    const t1 = h("table");
+    sortable(t1, l.types.slice(), [{ label: "Type", value: r => r.type }, { label: "kind", value: r => r.kind }, { label: "count", value: r => r.instances }, { label: "ms/s", value: r => r.us, sort: "desc" }, { label: "µs/tick", value: r => r.us / Math.max(1, r.ticks) }, { label: "max ms", value: r => r.maxUs }],
+      r => h("tr", {}, h("td", { class: "name" }, r.type), h("td", {}, r.kind), h("td", {}, r.instances), h("td", {}, (r.us / 1000 / secs).toFixed(3)), h("td", {}, (r.us / Math.max(1, r.ticks)).toFixed(1)), h("td", {}, fmtMs(r.maxUs))));
+    typeCard.append(h("div", { class: "scroll" }, t1));
+    const chunkCard = h("div", { class: "card" }, h("h2", {}, "By chunk"));
+    const t2 = h("table");
+    sortable(t2, chunks.slice(), [{ label: "Chunk (blocks)", value: r => r.x * 1e6 + r.z }, { label: "ms/s", value: r => r.entityUs + r.blockEntityUs, sort: "desc" }, { label: "entities", value: r => r.entityUs }, { label: "block ent.", value: r => r.blockEntityUs }, { label: "Mostly", value: r => r.top[0]?.[0] || "" }],
+      r => h("tr", {}, h("td", { class: "name" }, `${r.x}, ${r.z} (${r.x * 16}, ${r.z * 16})`), h("td", {}, ((r.entityUs + r.blockEntityUs) / 1000 / secs).toFixed(3)), h("td", {}, (r.entityUs / 1000 / secs).toFixed(3)), h("td", {}, (r.blockEntityUs / 1000 / secs).toFixed(3)), h("td", { class: "name" }, r.top.slice(0, 3).map(t => `${t[0]} ×${t[1]}`).join(", "))));
+    chunkCard.append(h("div", { class: "scroll" }, t2));
+    grid.append(typeCard, chunkCard);
+    body.append(grid);
+    const instCard = h("div", { class: "card" }, h("h2", {}, "Individual entities and block entities"), h("div", { class: "hint" }, "Coordinates are the block position (last known for entities)."));
+    const t3 = h("table");
+    sortable(t3, l.instances.slice(), [{ label: "Type", value: r => r.type }, { label: "kind", value: r => r.kind }, { label: "x y z", value: r => r.x }, { label: "ticks", value: r => r.ticks }, { label: "ms/s", value: r => r.us, sort: "desc" }, { label: "µs/tick", value: r => r.us / Math.max(1, r.ticks) }, { label: "max ms", value: r => r.maxUs }],
+      r => h("tr", {}, h("td", { class: "name" }, r.type), h("td", {}, r.kind), h("td", {}, `${r.x} ${r.y} ${r.z}`), h("td", {}, r.ticks), h("td", {}, (r.us / 1000 / secs).toFixed(3)), h("td", {}, (r.us / Math.max(1, r.ticks)).toFixed(1)), h("td", {}, fmtMs(r.maxUs))));
+    instCard.append(h("div", { class: "scroll" }, t3));
+    body.append(instCard);
+  };
+  select.onchange = render;
+  if (arg) { const i = levels.findIndex(l => l.dimension === arg && !l.client); if (i >= 0) select.value = i; }
+  render();
+};
+
+VIEWS.cpu = el => {
+  const j = D.jvm;
+  if (!j || !j.cpuTree) { el.append(h("div", { class: "card empty" }, "JVM sampling was off or unavailable for this capture.")); return; }
+  const f = j.cpuTree, n = f.parent.length;
+  const card = h("div", { class: "card" }, h("h2", {}, "Sampled call tree (all threads)"),
+    h("div", { class: "hint" }, `${j.executionSamples} Java and ${j.nativeSamples} native samples. Width = share of samples. Click to zoom, click the top bar to zoom out. Colours = owning mod.` + (j.truncatedStacks ? ` ${j.truncatedStacks} stacks were cut at JFR's depth limit (marked).` : "")));
+  const search = h("input", { type: "search", placeholder: "Highlight methods or mods…" });
+  card.append(h("div", { class: "controls" }, search));
+  const holder = h("div"); card.append(holder);
+  el.append(card);
+  let root = 0;
+  const label = i => i === 0 ? "all threads" : j.frames.label[f.frame[i]];
+  const owner = i => i === 0 ? "" : j.frames.owner[f.frame[i]];
+  function draw() {
+    holder.innerHTML = "";
+    const rowH = 17, maxRows = 60;
+    const rows = [];
+    const lay = (node, x, w, depth) => {
+      if (w < 0.6 || depth >= maxRows) return;
+      rows.push([node, x, w, depth]);
+      let cx = x;
+      const kids = f.children[node].slice().sort((a, b) => f.total[b] - f.total[a]);
+      for (const c of kids) { const cw = w * f.total[c] / Math.max(1, f.total[node]); lay(c, cx, cw, depth + 1); cx += cw; }
+    };
+    const width = holder.clientWidth || 900;
+    // ancestors of the zoom root are drawn full width above it
+    const chain = []; for (let x = root; x > 0; x = f.parent[x]) chain.unshift(x);
+    let depth0 = 0;
+    rows.push([0, 0, width, 0]);
+    for (const a of chain) rows.push([a, 0, width, ++depth0]);
+    const startLen = rows.length;
+    let cx = 0;
+    if (root === 0) { rows.length = 0; lay(0, 0, width, 0); }
+    else { const kids = f.children[root].slice().sort((a, b) => f.total[b] - f.total[a]); for (const c of kids) { const cw = width * f.total[c] / Math.max(1, f.total[root]); lay(c, cx, cw, depth0 + 1); cx += cw; } }
+    const depth = Math.max(...rows.map(r => r[3])) + 1;
+    const { c, g } = canvas(holder, depth * rowH + 2);
+    g.font = "11px system-ui";
+    const q = search.value.toLowerCase();
+    for (const [node, x, w, d] of rows) {
+      const o = owner(node), lbl = label(node), hit = q && (lbl.toLowerCase().includes(q) || o.toLowerCase().includes(q));
+      g.fillStyle = node === 0 ? css("--soft") : lbl.startsWith("thread: ") ? "#6d7a88" : lbl.startsWith("(stack") ? css("--high") : ownerColor(o);
+      g.globalAlpha = q && !hit && node !== 0 ? 0.25 : 1;
+      g.fillRect(x, d * rowH, Math.max(0.5, w - 0.5), rowH - 1);
+      g.globalAlpha = 1;
+      if (w > 30) { g.fillStyle = node === 0 ? css("--ink") : "#fff"; const s = lbl.replace(/^.*\.(?=[^.]+\.[^.]+$)/, ""); g.fillText(s.slice(0, Math.floor(w / 6.3)), x + 3, d * rowH + 12); }
+    }
+    c.onmousemove = e => {
+      const rect = c.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const hit = rows.find(r => mx >= r[1] && mx < r[1] + r[2] && my >= r[3] * rowH && my < (r[3] + 1) * rowH);
+      if (!hit) return hideTip();
+      const node = hit[0];
+      showTip(e, `${label(node)}\nowner: ${owner(node) || "—"}\n${f.total[node]} samples (${(100 * f.total[node] / Math.max(1, f.total[0])).toFixed(1)}%), own ${f.self[node]}`);
+    };
+    c.onmouseleave = hideTip;
+    c.onclick = e => {
+      const rect = c.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const hit = rows.find(r => mx >= r[1] && mx < r[1] + r[2] && my >= r[3] * rowH && my < (r[3] + 1) * rowH);
+      if (hit) { root = hit[0] === root ? f.parent[root] < 0 ? 0 : f.parent[root] : hit[0]; draw(); }
+    };
+  }
+  search.oninput = draw;
+  draw();
+  onWidth(card, draw);
+  // Tables: methods by own samples, owners
+  const byMethod = new Map(), byOwnerSelf = new Map(), byOwnerAny = new Map();
+  for (let i = 1; i < n; i++) {
+    if (!f.self[i] || f.parent[i] === 0) continue;
+    const fr = f.frame[i], lbl = j.frames.label[fr], o = j.frames.owner[fr];
+    if (!byMethod.has(lbl)) byMethod.set(lbl, [0, o]);
+    byMethod.get(lbl)[0] += f.self[i];
+    byOwnerSelf.set(o, (byOwnerSelf.get(o) || 0) + f.self[i]);
+    const owners = new Set(); for (let x = i; x > 0 && f.parent[x] > 0; x = f.parent[x]) owners.add(j.frames.owner[f.frame[x]]);
+    for (const ow of owners) if (ow) byOwnerAny.set(ow, (byOwnerAny.get(ow) || 0) + f.self[i]);
+  }
+  const all = Math.max(1, f.total[0]);
+  const row = h("div", { class: "row" });
+  const t1 = h("table");
+  sortable(t1, [...byMethod], [{ label: "Method", value: r => r[0] }, { label: "owner", value: r => r[1][1] }, { label: "own samples", value: r => r[1][0], sort: "desc" }, { label: "%", value: r => r[1][0] }],
+    r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, r[1][1]), h("td", {}, r[1][0]), h("td", {}, (100 * r[1][0] / all).toFixed(1))));
+  const t2 = h("table");
+  sortable(t2, [...byOwnerAny].map(([o, v]) => [o, v, byOwnerSelf.get(o) || 0]), [{ label: "Owner", value: r => r[0] }, { label: "on stack %", value: r => r[1], sort: "desc", title: "Share of samples whose stack contains this owner's code anywhere" }, { label: "leaf %", value: r => r[2], title: "Share of samples whose innermost frame is this owner's code" }],
+    r => h("tr", {}, h("td", { class: "name" }, h("i", { style: `display:inline-block;width:9px;height:9px;margin-right:6px;background:${ownerColor(r[0])}` }), r[0]), h("td", {}, (100 * r[1] / all).toFixed(1)), h("td", {}, (100 * r[2] / all).toFixed(1))));
+  row.append(h("div", { class: "card" }, h("h2", {}, "Hottest methods (own samples)"), h("div", { class: "scroll" }, t1)),
+    h("div", { class: "card" }, h("h2", {}, "By owner"), h("div", { class: "hint" }, "Ownership is where code lives, not who caused the work."), h("div", { class: "scroll" }, t2)));
+  el.append(row);
+};
+
+VIEWS.memory = el => {
+  const m = D.metrics || [], j = D.jvm || {};
+  const card = h("div", { class: "card" }, h("h2", {}, "Heap over time"), h("div", { class: "hint" }, "Used heap (filled), still in use after clean-up (red line — the live set), committed (thin line) and maximum (dashed), once per second. Marks below: collections (grey), times the game waited for memory (red)."));
+  el.append(card);
+  if (m.length > 1) {
+    const holder = h("div"); card.append(holder);
+    const draw = () => {
+      holder.innerHTML = "";
+      const { g, w } = canvas(holder, 200), H = 170, pad = 44, W = w - pad - 8;
+      const max = Math.max(...m.map(x => x[3] > 0 ? x[3] : x[2])) * 1.05, dur = D.durationUs;
+      const X = t => pad + t / dur * W, Y = v => 6 + H - v / max * H;
+      g.fillStyle = css("--panel"); g.fillRect(0, 0, w, 200);
+      g.fillStyle = css("--muted"); g.font = "11px system-ui";
+      for (let i = 0; i <= 4; i++) g.fillText(fmtB(max * i / 4), 2, Y(max * i / 4) + 4);
+      g.fillStyle = css("--accent"); g.globalAlpha = .35; g.beginPath(); g.moveTo(X(m[0][0]), Y(0));
+      for (const p of m) g.lineTo(X(p[0]), Y(p[1])); g.lineTo(X(m[m.length - 1][0]), Y(0)); g.fill(); g.globalAlpha = 1;
+      g.strokeStyle = css("--ink"); g.lineWidth = 1; g.beginPath(); m.forEach((p, i) => i ? g.lineTo(X(p[0]), Y(p[2])) : g.moveTo(X(p[0]), Y(p[2]))); g.stroke();
+      if (m.some(p => p[9] > 0)) { g.strokeStyle = css("--high"); g.lineWidth = 2; g.beginPath(); let st = false; for (const p of m) { if (!(p[9] > 0)) continue; if (!st) { g.moveTo(X(p[0]), Y(p[9])); st = true; } else g.lineTo(X(p[0]), Y(p[9])); } g.stroke(); g.strokeStyle = css("--ink"); g.lineWidth = 1; }
+      if (m[0][3] > 0) { g.setLineDash([4, 4]); g.beginPath(); g.moveTo(pad, Y(m[0][3])); g.lineTo(w - 8, Y(m[0][3])); g.stroke(); g.setLineDash([]); }
+      g.fillStyle = css("--muted"); for (const gc of j.gc || []) g.fillRect(X(gc[0]), H + 10, 1, 8);
+      g.fillStyle = css("--high"); for (const s of j.allocationStalls || []) g.fillRect(X(s[0]), H + 20, 2, 8);
+    };
+    draw(); onWidth(card, draw);
+  }
+  const gcs = j.gc || [];
+  if (gcs.length) {
+    const pauses = gcs.reduce((a, g) => a + g[2], 0), longest = Math.max(...gcs.map(g => g[3]));
+    card.append(h("p", {}, `${gcs.length} collections by ${j.youngCollector}/${j.oldCollector}; pauses ${fmtMs(pauses)} ms in total, longest ${fmtMs(longest)} ms.` +
+      ((j.allocationStalls || []).length ? ` ${j.allocationStalls.length} allocation stalls totalling ${fmtMs(j.allocationStalls.reduce((a, s) => a + s[1], 0))} ms (threads waiting for memory).` : "")));
+  }
+  const secs = D.durationUs / 1e6;
+  if (j.allocByMod && j.allocByMod.length) {
+    const t = h("table"), total = Math.max(1, j.allocationBytesEstimate);
+    sortable(t, j.allocByMod.slice(), [{ label: "Mod", value: r => r[0] }, { label: "MB/s", value: r => r[2], sort: "desc" }, { label: "share", value: r => r[2] }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, (r[2] / (1 << 20) / secs).toFixed(1)), h("td", {}, (100 * r[2] / total).toFixed(1) + "%")));
+    el.append(h("div", { class: "card" }, h("h2", {}, "New memory by mod"), h("div", { class: "hint" }, "Charged to the innermost add-on mod on the stack (else the game). Churn, not what stays in memory."), h("div", { class: "scroll" }, t)));
+  }
+  if (D.deepMemory) el.append(h("div", { class: "card" }, h("h2", {}, "Who holds memory"), h("div", { class: "hint" }, "From a heap dump after the capture: each object is charged to the nearest mod object keeping it alive; otherwise to the game or library object holding it."), h("pre", { class: "md" }, D.deepMemory)));
+  if (D.heapSnapshot) {
+    const hs = D.heapSnapshot, t1 = h("table"), t2 = h("table");
+    sortable(t1, hs.owners.slice(), [{ label: "Owner", value: r => r[0] }, { label: "MB", value: r => r[1], sort: "desc" }, { label: "share", value: r => r[1] }, { label: "classes", value: r => r[3] }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, (r[1] / 1048576).toFixed(1)), h("td", {}, (100 * r[1] / hs.totalBytes).toFixed(1) + "%"), h("td", {}, r[3])));
+    sortable(t2, hs.classes.slice(), [{ label: "Class", value: r => r[0] }, { label: "owner", value: r => r[3] }, { label: "MB", value: r => r[2], sort: "desc" }, { label: "count", value: r => r[1] }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, r[3]), h("td", {}, (r[2] / 1048576).toFixed(1)), h("td", {}, fmtN(r[1]))));
+    el.append(h("div", { class: "row" },
+      h("div", { class: "card" }, h("h2", {}, `What is held in memory (${(hs.totalBytes / 1048576).toFixed(0)} MB)`), h("div", { class: "hint" }, `Snapshot after a full clean-up at the end of the capture (paused the game ${fmtMs(hs.pauseUs)} ms). Plain arrays can belong to any mod.`), h("div", { class: "scroll" }, t1)),
+      h("div", { class: "card" }, h("h2", {}, "Largest classes"), h("div", { class: "scroll" }, t2))));
+  }
+  if (j.allocByClass && j.allocByClass.length) {
+    const total = Math.max(1, j.allocationBytesEstimate);
+    const row = h("div", { class: "row" });
+    const t1 = h("table");
+    sortable(t1, j.allocByClass.slice(), [{ label: "Type", value: r => r[0] }, { label: "share", value: r => r[2], sort: "desc" }, { label: "est. MB/s", value: r => r[2] }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, (100 * r[2] / total).toFixed(1) + "%"), h("td", {}, (r[2] / (1 << 20) / (D.durationUs / 1e6)).toFixed(1))));
+    const t2 = h("table");
+    sortable(t2, j.allocBySite.slice(), [{ label: "Site → type", value: r => r[0] }, { label: "share", value: r => r[2], sort: "desc" }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, (100 * r[2] / total).toFixed(1) + "%")));
+    row.append(h("div", { class: "card" }, h("h2", {}, "Allocated types"), h("div", { class: "hint" }, `Estimated ${(total / (1 << 20) / (D.durationUs / 1e6)).toFixed(0)} MB/s in total. Sampled and weighted by size: where memory is allocated, not what is kept.`), h("div", { class: "scroll" }, t1)),
+      h("div", { class: "card" }, h("h2", {}, "Allocation sites"), h("div", { class: "hint" }, "Innermost frame outside the JDK and common libraries."), h("div", { class: "scroll" }, t2)));
+    el.append(row);
+  }
+};
+
+VIEWS.threads = el => {
+  const j = D.jvm || {};
+  if (j.threadCpu && j.threadCpu.length) {
+    const groups = new Map();
+    for (const [name, group, avg, max] of j.threadCpu) { const g = groups.get(group) || [0, 0, 0]; g[0] += avg; g[1] = Math.max(g[1], max); g[2]++; groups.set(group, g); }
+    const t1 = h("table");
+    sortable(t1, [...groups], [{ label: "Thread group", value: r => r[0] }, { label: "threads", value: r => r[1][2] }, { label: "avg cores", value: r => r[1][0], sort: "desc" }, { label: "peak (one thread)", value: r => r[1][1] }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, r[1][2]), h("td", {}, r[1][0].toFixed(2)), h("td", {}, r[1][1].toFixed(2))));
+    el.append(h("div", { class: "card" }, h("h2", {}, "CPU by thread group"), h("div", { class: "hint" }, "From JFR, once per second. 1.00 = one full core."), h("div", { class: "scroll" }, t1)));
+  }
+  if (j.pools && j.pools.length) {
+    const t = h("table");
+    sortable(t, j.pools.slice(), [{ label: "Thread pool", value: r => r.name }, { label: "JVM samples", value: r => r.samples, sort: "desc" }, { label: "Mods running on it", value: r => r.owners[0]?.[1] || 0 }],
+      r => h("tr", {}, h("td", { class: "name" }, r.name), h("td", {}, r.samples), h("td", { class: "name" }, r.owners.slice(0, 4).map(o => `${o[0]} ${(100 * o[1] / Math.max(1, r.samples)).toFixed(0)}%`).join(", "))));
+    el.append(h("div", { class: "card" }, h("h2", {}, "Which mods run on each thread pool"), h("div", { class: "hint" }, "Pools are often shared: one mod's work can run on another mod's threads."), h("div", { class: "scroll" }, t)));
+  }
+  const pause = (title, hint, list, cols) => {
+    if (!list || !list.length) return;
+    const t = h("table");
+    sortable(t, list.slice(), cols, r => h("tr", { title: r[5] || "" }, cols.map(c => h("td", { class: c.cls || "" }, c.show ? c.show(r) : c.value(r)))));
+    el.append(h("div", { class: "card" }, h("h2", {}, title), h("div", { class: "hint" }, hint), h("div", { class: "scroll" }, t)));
+  };
+  pause("JVM-wide pauses", "Operations that stop all Java threads (over 1 ms). GC pauses are under Memory.", j.vmOperations,
+    [{ label: "Operation", value: r => r[4], cls: "name" }, { label: "at", value: r => r[0], show: r => fmtS(r[0]) }, { label: "ms", value: r => r[1], sort: "desc", show: r => fmtMs(r[1]) }, { label: "kind", value: r => r[3] }, { label: "requested by", value: r => r[2] }]);
+  pause("Blocking on game threads", "Render/server thread waits on locks (>5 ms) or parks (>10 ms). Hover a row for the stack.", j.blocking,
+    [{ label: "Thread", value: r => r[2] }, { label: "kind", value: r => r[3] }, { label: "on", value: r => r[4], cls: "name" }, { label: "at", value: r => r[0], show: r => fmtS(r[0]) }, { label: "ms", value: r => r[1], sort: "desc", show: r => fmtMs(r[1]) }]);
+  pause("File and network waits on game threads", "Reads and writes over 1 ms on the render or server thread (only when the capture recorded io). Hover a row for the stack.", j.ioOnGameThreads,
+    [{ label: "Thread", value: r => r[2] }, { label: "kind", value: r => r[3] }, { label: "file / address", value: r => r[4], cls: "name" }, { label: "at", value: r => r[0], show: r => fmtS(r[0]) }, { label: "ms", value: r => r[1], sort: "desc", show: r => fmtMs(r[1]) }]);
+  if (j.io && j.io.length) {
+    const t = h("table");
+    sortable(t, j.io.slice(), [{ label: "Kind", value: r => r[0] }, { label: "file / address", value: r => r[1] }, { label: "count", value: r => r[2] }, { label: "total ms", value: r => r[3], sort: "desc" }, { label: "longest ms", value: r => r[4] }, { label: "on game threads ms", value: r => r[5] }],
+      r => h("tr", {}, h("td", {}, r[0]), h("td", { class: "name" }, r[1]), h("td", {}, r[2]), h("td", {}, fmtMs(r[3])), h("td", {}, fmtMs(r[4])), h("td", {}, fmtMs(r[5]))));
+    el.append(h("div", { class: "card" }, h("h2", {}, "File and network waits"), h("div", { class: "hint" }, "Every read or write over 1 ms, grouped by folder (files) or address. Background threads waiting on disk are normal; game threads waiting are stutters."), h("div", { class: "scroll" }, t)));
+  }
+  if (j.blockingByGroup && j.blockingByGroup.length) {
+    const t = h("table");
+    sortable(t, j.blockingByGroup.slice(), [{ label: "Thread group", value: r => r[0] }, { label: "kind", value: r => r[1] }, { label: "events", value: r => r[2] }, { label: "total ms", value: r => r[3], sort: "desc" }],
+      r => h("tr", {}, h("td", { class: "name" }, r[0]), h("td", {}, r[1]), h("td", {}, r[2]), h("td", {}, fmtMs(r[3]))));
+    el.append(h("div", { class: "card" }, h("h2", {}, "Waiting by thread group"), h("div", { class: "hint" }, "Idle worker threads park a lot by design; this is context, not a problem by itself."), h("div", { class: "scroll" }, t)));
+  }
+  if (!el.children.length) el.append(h("div", { class: "card empty" }, "No JVM thread data (JFR was off)."));
+};
+
+VIEWS.logs = el => {
+  const L = D.logs || {};
+  if (!L.kinds || !L.kinds.length) { el.append(h("div", { class: "card empty" }, "No warnings or errors were logged during the capture.")); return; }
+  const card = h("div", { class: "card" }, h("h2", {}, "Warnings and errors"), h("div", { class: "hint" }, "Repeated messages are merged (numbers ignored when comparing)." + (L.dropped ? ` ${L.dropped} further distinct messages were not kept.` : "")));
+  const t = h("table");
+  sortable(t, L.kinds.slice(), [{ label: "Message", value: r => r.message }, { label: "level", value: r => r.level }, { label: "logger", value: r => r.logger }, { label: "count", value: r => r.count, sort: "desc" }, { label: "first", value: r => r.first }],
+    r => {
+      const msg = h("td", { class: "name" }, r.message.slice(0, 400));
+      if (r.exception) msg.append(h("details", {}, h("summary", {}, "exception"), h("pre", { class: "md" }, r.exception)));
+      return h("tr", {}, msg, h("td", {}, r.level), h("td", { class: "name" }, r.logger), h("td", {}, r.count), h("td", {}, fmtS(r.first)));
+    });
+  card.append(h("div", { class: "scroll" }, t));
+  el.append(card);
+};
+
+VIEWS.brief = el => {
+  const md = D.summaryMarkdown || "";
+  const pre = h("pre", { class: "md" }, md);
+  const copy = h("button", { class: "btn", onclick: async () => { await navigator.clipboard.writeText(md); copy.textContent = "Copied"; setTimeout(() => copy.textContent = "Copy", 1500); } }, "Copy");
+  const save = h("button", { class: "btn", onclick: () => { const a = h("a", { href: URL.createObjectURL(new Blob([md], { type: "text/markdown" })), download: `lightning-${D.id}-summary.md` }); a.click(); } }, "Save as .md");
+  el.append(h("div", { class: "card" }, h("h2", {}, "Brief for an analyst"), h("div", { class: "hint" }, "Plain-text summary of this capture with its measurement basis, for pasting into a chat with a person or an AI model."), h("div", { class: "controls" }, copy, save), pre));
+};
+
+VIEWS.capture = el => {
+  const env = D.environment || {}, cov = D.coverage || {}, ov = cov && D.overhead || {};
+  const kv = obj => h("div", { class: "kv" }, Object.entries(obj).filter(([k, v]) => typeof v !== "object").flatMap(([k, v]) => [h("div", {}, k), h("div", {}, String(v))]));
+  el.append(h("div", { class: "row" },
+    h("div", { class: "card" }, h("h2", {}, "Environment"), kv(env), env.jvmFlags && env.jvmFlags.length ? h("p", { class: "hint" }, "JVM flags: " + env.jvmFlags.join(" ")) : null),
+    h("div", { class: "card" }, h("h2", {}, "Coverage"), kv(cov), h("h3", {}, "Limits"), h("ul", {}, (cov.limits || []).map(l => h("li", { class: "hint" }, l))),
+      h("h3", {}, "Options"), kv(D.options || {}))));
+  const o = D.overhead || {};
+  const secs = D.durationUs / 1e6;
+  const rows = [
+    ["Section events recorded", fmtN(o.events) + ` (${fmtN(o.events / secs)}/s)`],
+    ["Events dropped", String(o.eventsLost)],
+    ["Event file", fmtB(o.eventFileBytes || 0)],
+    ["JFR setup", fmtMs(o.jfrSetupUs || 0) + " ms"],
+    ["JFR threads CPU", o.jfrThreadsCpuUs >= 0 ? fmtMs(o.jfrThreadsCpuUs) + " ms" : "—"],
+    ["Lightning threads CPU", o.lightningThreadsCpuUs !== undefined ? fmtMs(o.lightningThreadsCpuUs) + " ms" : "—"],
+    ["GPU timer calls", o.gpuQueryCalls !== undefined ? `${fmtN(o.gpuQueryCalls)} calls, ${fmtMs(o.gpuQueryUs)} ms on the render thread` : "—"],
+    ["Analysis", fmtMs(o.analysisUs || 0) + " ms"]];
+  el.append(h("div", { class: "card" }, h("h2", {}, "Recording cost"), h("div", { class: "hint" }, "What Lightning itself spent. Section timing costs roughly two clock reads per marker on the thread that runs it."),
+    h("div", { class: "kv" }, rows.flatMap(r => [h("div", {}, r[0]), h("div", {}, r[1])]))));
+  if (env.mods) {
+    const t = h("table");
+    sortable(t, env.mods.slice(), [{ label: "Mod", value: r => r.name }, { label: "id", value: r => r.id, sort: "desc" }, { label: "version", value: r => r.version }],
+      r => h("tr", {}, h("td", { class: "name" }, r.name), h("td", {}, r.id), h("td", {}, r.version)));
+    el.append(h("div", { class: "card" }, h("h2", {}, `Mods (${env.mods.length})`), h("div", { class: "scroll" }, t)));
+  }
+};
+
+load();
+</script>
+</body>
+</html>

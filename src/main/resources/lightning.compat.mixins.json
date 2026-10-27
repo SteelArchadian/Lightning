@@ -1,0 +1,15 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "dev.lightning.mixin.compat",
+  "plugin": "dev.lightning.mixin.compat.CompatMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "IrisGLDebugMixin",
+    "VoxyPipelineMixin",
+    "VoxyRenderMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}
