@@ -65,4 +65,4 @@ The jar is written to `build/libs/`.
 
 ## Credits and license
 
-Licensed under the GNU Lesser General Public License v3.0 only: see [LICENSE](LICENSE) (with the GPL text it builds on in [COPYING](COPYING)). Made for the Foundation modpack, with AI assistance.
+Licensed under the GNU Lesser General Public License v3.0 only: see [LICENSE](LICENSE) (with the GPL text it builds on in [COPYING](COPYING)). Made with AI assistance.
