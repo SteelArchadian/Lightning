@@ -38,10 +38,12 @@ final class LightningClient {
     private LightningClient() {}
 
     static void init(IEventBus modBus, net.neoforged.fml.ModContainer container) {
-        container.registerExtensionPoint(net.neoforged.neoforge.client.gui.IConfigScreenFactory.class,
+        // The shared Config Panel screen when installed, NeoForge's own screen otherwise.
+        if (net.neoforged.fml.ModList.get().isLoaded("configpanel")) PanelHook.register(container);
+        else container.registerExtensionPoint(net.neoforged.neoforge.client.gui.IConfigScreenFactory.class,
                 net.neoforged.neoforge.client.gui.ConfigurationScreen::new);
         NeoForge.EVENT_BUS.addListener((RegisterClientCommandsEvent e) -> LightningCommands.registerClient(e.getDispatcher(), (c, client) -> new ChatFeedback()));
-        NeoForge.EVENT_BUS.addListener((ScreenEvent.Init.Post e) -> onRenderThread());
+        NeoForge.EVENT_BUS.addListener(ScreenEvent.Init.Post.class, dev.lightning.capture.Guard.safe("screen init", (ScreenEvent.Init.Post e) -> onRenderThread()));
         if (Boolean.getBoolean("lightning.smoke")) {
             NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.ClientTickEvent.Post e) -> onRenderThread());
         }
@@ -51,9 +53,11 @@ final class LightningClient {
             // Development check (run config "clientSmokeWorld"): join the test world, record, quit.
             NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn e) -> worldSmoke());
         }
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn e) ->
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn.class, dev.lightning.capture.Guard.safe("auto start", (net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn e) ->
                 Lightning.autoStart(msg -> chat(Component.literal(msg).withStyle(ChatFormatting.GOLD)),
-                        () -> Minecraft.getInstance().execute(Minecraft.getInstance()::stop)));
+                        () -> Minecraft.getInstance().execute(Minecraft.getInstance()::stop))));
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut.class, dev.lightning.capture.Guard.safe("leaving world", (net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut e) ->
+                dev.lightning.capture.Track.notGameplay(dev.lightning.capture.Track.LEAVING_WORLD)));
         loadingSteps(modBus);
     }
 
@@ -81,13 +85,13 @@ final class LightningClient {
     private static void loadingSteps(IEventBus modBus) {
         modBus.addListener(net.neoforged.bus.api.EventPriority.HIGHEST, (net.neoforged.fml.event.lifecycle.FMLClientSetupEvent e) ->
                 LoadTimeline.milestone("Client setup"));
-        NeoForge.EVENT_BUS.addListener((ScreenEvent.Render.Post e) -> {
+        NeoForge.EVENT_BUS.addListener(ScreenEvent.Render.Post.class, dev.lightning.capture.Guard.safe("title screen", (ScreenEvent.Render.Post e) -> {
             if (e.getScreen() instanceof net.minecraft.client.gui.screens.TitleScreen && Minecraft.getInstance().getOverlay() == null
                     && LoadTimeline.firstTime("title")) {
                 LoadTimeline.phase("Title screen");
             }
-        });
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn e) -> {
+        }));
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn.class, dev.lightning.capture.Guard.safe("logged in", (net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn e) -> {
             StartupCapture.loggedIn();
             firstWorldFrame = true;
             Exporter.Result waiting = pendingSaved;
@@ -95,14 +99,14 @@ final class LightningClient {
                 pendingSaved = null;
                 new ChatFeedback().saved(waiting);
             }
-        });
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.RenderFrameEvent.Post e) -> {
+        }));
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.client.event.RenderFrameEvent.Post.class, dev.lightning.capture.Guard.safe("first world frame", (net.neoforged.neoforge.client.event.RenderFrameEvent.Post e) -> {
             if (firstWorldFrame && Minecraft.getInstance().level != null) {
                 firstWorldFrame = false;
                 if (StartupCapture.joining()) LoadTimeline.milestone("First world frame");
             }
-        });
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.ClientTickEvent.Post e) -> {
+        }));
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.client.event.ClientTickEvent.Post.class, dev.lightning.capture.Guard.safe("world shown", (net.neoforged.neoforge.client.event.ClientTickEvent.Post e) -> {
             if (!StartupCapture.joining()) return;
             Minecraft mc = Minecraft.getInstance();
             var screen = mc.screen;
@@ -112,7 +116,7 @@ final class LightningClient {
                     || screen instanceof net.minecraft.client.gui.screens.GenericMessageScreen
                     || screen instanceof net.minecraft.client.gui.screens.ProgressScreen;
             if (mc.player != null && mc.level != null && !loadingScreen && mc.getOverlay() == null) StartupCapture.worldShown();
-        });
+        }));
     }
 
     /** Runs on the render thread with the GL context current. */
@@ -122,11 +126,12 @@ final class LightningClient {
         if (Boolean.getBoolean("lightning.smoke") || worldSmoke) {
             if (!smokeMinimized) {
                 smokeMinimized = true;
-                // Test clients must stay silent and out of the way. A world test needs a real-size
-                // framebuffer to render, so its window is hidden rather than minimised.
+                // Test clients must stay silent and out of the way, but keep their taskbar button so
+                // the user can watch or end them. A world test needs a real-size framebuffer to
+                // render, so its window is parked off-screen rather than minimised.
                 Minecraft.getInstance().options.getSoundSourceOptionInstance(net.minecraft.sounds.SoundSource.MASTER).set(0.0);
                 long window = Minecraft.getInstance().getWindow().getWindow();
-                if (worldSmoke) org.lwjgl.glfw.GLFW.glfwHideWindow(window);
+                if (worldSmoke) org.lwjgl.glfw.GLFW.glfwSetWindowPos(window, -32000, -32000);
                 else org.lwjgl.glfw.GLFW.glfwIconifyWindow(window);
             }
             if (!worldSmoke) smokeTest();

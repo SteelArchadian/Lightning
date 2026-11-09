@@ -163,7 +163,12 @@ public final class StartupCapture {
         Recorder r = recorder;
         if (!running && r != null && r.state() == Recorder.State.IDLE && (Boolean.getBoolean("lightning.join") || safe(joinsEnabled))) {
             joinCapture = true;
-            running = r.startLoading(Automation.options("").withLoading(), listener(), System.nanoTime(), Automation.label("World join"));
+            try {
+                running = r.startLoading(Automation.options("").withLoading(), listener(), System.nanoTime(), Automation.label("World join"));
+            } catch (RuntimeException e) {
+                Guard.failed("world join capture", e);
+                running = false;
+            }
             if (!running) joinCapture = false;
         }
         LoadTimeline.phase(multiplayer ? "Joining: connecting to the server" : "Joining: starting the world");

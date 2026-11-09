@@ -43,6 +43,8 @@ class PipelineTest {
             for (int frame = 0; frame < 300; frame++) {
                 Track t = Capture.track();
                 if (frame == 100) capture.mark("second part");
+                // Frames 200-219 have a menu open; the first five of them are slow (menu, not gameplay lag).
+                t.screen(frame >= 200 && frame < 220 ? "test.screens.MenuScreen" : null);
                 t.tickStart();
                 // Same layout as vanilla's Minecraft.runTick: "render", "gameRenderer" and
                 // "updateDisplay" are siblings at the top of the frame.
@@ -50,12 +52,18 @@ class PipelineTest {
                 t.pop();
                 t.push("gameRenderer");
                 t.push("level");
-                spin(frame == 150 ? 40_000_000 : 3_000_000); // one spike; long enough for JVM samples to land
+                spin(frame == 150 ? 40_000_000 : frame >= 200 && frame < 205 ? 30_000_000 : 3_000_000); // spikes; long enough for JVM samples to land
                 t.pop();
                 t.pop();
                 t.push("updateDisplay");
                 spin(200_000);
                 t.pop();
+                // A periodic step (like the 20 Hz client tick) that only some frames run.
+                if (frame >= 225 && frame % 25 == 0) {
+                    t.push("clientTick");
+                    spin(12_000_000);
+                    t.pop();
+                }
                 t.tickEnd();
             }
         }, "Render thread");
@@ -67,6 +75,12 @@ class PipelineTest {
                 t.push(() -> "level minecraft:overworld");
                 spin(1_000_000);
                 t.pop();
+                // Every 20th tick a heavy step: slow server ticks the slowTicks block should explain.
+                if (tick % 20 == 10) {
+                    t.push("spawner");
+                    spin(10_000_000);
+                    t.pop();
+                }
                 t.pop();
                 t.push("nextTickWait");
                 spin(200_000);
@@ -121,8 +135,8 @@ class PipelineTest {
 
         // JVM samples landed inside sections of the simulated render thread.
         // JFR occasionally cannot walk the stacks of this tight test loop on a busy machine; when it
-        // took no samples at all there is nothing to attribute, so only check attribution otherwise.
-        if (profile.getAsJsonObject("jvm").get("executionSamples").getAsLong() > 0) {
+        // took no samples of the render thread there is nothing to attribute, so only check attribution otherwise.
+        if (renderThread.get("jvmSamples").getAsLong() > 0) {
             long attributed = 0;
             for (var s : tree.getAsJsonArray("samples")) attributed += s.getAsLong();
             assertTrue(attributed > 0, "no samples attributed to render sections");
@@ -153,6 +167,39 @@ class PipelineTest {
         double low = results.getAsJsonObject("whole").get("low1PctFps").getAsDouble();
         assertTrue(low > 0 && low < results.getAsJsonObject("whole").get("fps").getAsDouble(), "1% low " + low);
         assertTrue(result.summary().contains("gameRenderer › level"));
+        // Menu frames are told apart from gameplay frames.
+        JsonObject slow = results.getAsJsonObject("slowFrames");
+        assertEquals(20, slow.get("menuFrames").getAsInt());
+        // At least the five injected ones; a busy machine can stall another menu frame past the threshold.
+        int menuSlow = slow.get("menuSlowFrames").getAsInt();
+        assertTrue(menuSlow >= 5 && menuSlow <= 20, "menuSlowFrames " + menuSlow);
+        assertEquals(menuSlow, slow.getAsJsonObject("menuScreens").getAsJsonObject("MenuScreen").get("slow").getAsInt());
+        assertTrue(slow.get("slow").getAsInt() >= 1, "the gameplay spike at frame 150 is a slow frame");
+        // A step that runs only in slow frames is reported by presence, not just by extra time.
+        JsonObject tick = null;
+        for (var x : slow.getAsJsonArray("topSections")) {
+            if (x.getAsJsonObject().get("name").getAsString().equals("clientTick")) tick = x.getAsJsonObject();
+        }
+        assertNotNull(tick, "clientTick in slowFrames.topSections");
+        assertTrue(tick.get("slowFramesPct").getAsDouble() > tick.get("normalFramesPct").getAsDouble() + 30, tick.toString());
+        assertTrue(slow.get("verdict").getAsString().contains("also run clientTick"), slow.get("verdict").getAsString());
+        // Slow server ticks get the same comparison, judged by work, with the heavy step named.
+        JsonObject slowTicks = results.getAsJsonObject("slowTicks");
+        assertNotNull(slowTicks, "slowTicks block");
+        assertTrue(slowTicks.get("slow").getAsInt() >= 4, slowTicks.toString());
+        boolean spawner = false;
+        for (var x : slowTicks.getAsJsonArray("sections")) spawner |= x.getAsJsonObject().get("name").getAsString().endsWith("spawner");
+        assertTrue(spawner, "spawner among slow-tick sections: " + slowTicks.getAsJsonArray("sections"));
+        // Cross-PC block: per-mod self time in absolute units, frame and tick counts, machine and flags.
+        JsonObject cross = results.getAsJsonObject("crosspc");
+        assertEquals(1, cross.get("version").getAsInt());
+        assertTrue(cross.get("frames").getAsInt() > 0);
+        assertTrue(cross.getAsJsonObject("machine").get("hwThreads").getAsInt() > 0);
+        if (renderThread.get("jvmSamples").getAsLong() > 0) {
+            double share = 0;
+            for (var m : cross.getAsJsonArray("mods")) share += m.getAsJsonObject().get("sharePct").getAsDouble();
+            assertTrue(share > 99 && share < 101, "mod shares sum to " + share);
+        }
 
         // Export writes a readable archive and a report with the data embedded.
         Files.createDirectories(dir.resolve("assets"));

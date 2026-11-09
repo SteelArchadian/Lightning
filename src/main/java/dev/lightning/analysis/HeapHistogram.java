@@ -88,15 +88,24 @@ public final class HeapHistogram {
         return name + "[]".repeat(dims);
     }
 
+    static final String UNKNOWN_ARRAYS = "plain arrays (owner unknown)";
+
+    /** Arrays of primitives or JDK types, which the histogram can't charge to a mod. */
+    static boolean ownerUnknownArray(String cls) {
+        if (!cls.startsWith("[")) return false;
+        String base = cls.substring(cls.lastIndexOf('[') + 1);
+        return !(base.startsWith("L") && base.endsWith(";")) || base.startsWith("Ljava.") || base.startsWith("Ljavax.") || base.startsWith("Ljdk.") || base.startsWith("Lsun.");
+    }
+
     private static String owner(String cls, ModIndex mods) {
         int dims = 0;
         while (dims < cls.length() && cls.charAt(dims) == '[') dims++;
         if (dims > 0) {
             String base = cls.substring(dims);
-            if (!(base.startsWith("L") && base.endsWith(";"))) return "plain arrays (owner unknown)";
+            if (!(base.startsWith("L") && base.endsWith(";"))) return UNKNOWN_ARRAYS;
             String element = base.substring(1, base.length() - 1);
             String owner = mods.ownerOfClass(element);
-            return owner.equals("java") ? "plain arrays (owner unknown)" : owner;
+            return owner.equals("java") ? UNKNOWN_ARRAYS : owner;
         }
         if (cls.contains("$$Lambda") || cls.contains("/0x")) cls = cls.replaceAll("\\$\\$Lambda.*|/0x.*", "");
         return mods.ownerOfClass(cls);

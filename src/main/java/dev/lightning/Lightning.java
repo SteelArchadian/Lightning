@@ -60,23 +60,23 @@ public final class Lightning {
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppingEvent e) -> {
             if (e.getServer().isDedicatedServer()) recorder.saveBeforeExit(90_000);
         });
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerAboutToStartEvent e) -> {
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.event.server.ServerAboutToStartEvent.class, dev.lightning.capture.Guard.safe("server starting", (net.neoforged.neoforge.event.server.ServerAboutToStartEvent e) -> {
             if (e.getServer().isDedicatedServer()) LoadTimeline.phase("Starting the server");
-        });
-        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStartedEvent e) -> {
+        }));
+        NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.event.server.ServerStartedEvent.class, dev.lightning.capture.Guard.safe("server started", (net.neoforged.neoforge.event.server.ServerStartedEvent e) -> {
             if (e.getServer().isDedicatedServer()) {
                 LoadTimeline.phase("Server running");
             } else {
                 LoadTimeline.milestone("World server started");
                 StartupCapture.integratedServerStarted();
             }
-        });
+        }));
         if (dist.isClient()) {
             LightningClient.init(modBus, container);
         } else {
             NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) -> LightningCommands.registerServer(e.getDispatcher()));
-            NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStartedEvent e) ->
-                    autoStart(msg -> org.slf4j.LoggerFactory.getLogger("Lightning").info(msg), () -> e.getServer().halt(false)));
+            NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.event.server.ServerStartedEvent.class, dev.lightning.capture.Guard.safe("auto start", (net.neoforged.neoforge.event.server.ServerStartedEvent e) ->
+                    autoStart(msg -> org.slf4j.LoggerFactory.getLogger("Lightning").info(msg), () -> e.getServer().halt(false))));
         }
     }
 
@@ -121,7 +121,11 @@ public final class Lightning {
             } catch (InterruptedException e) {
                 return;
             }
-            dev.lightning.capture.CaptureOptions o = dev.lightning.capture.Automation.options("--timeout " + duration);
+            // Automatic captures are benchmarks: also snapshot what fills memory once the measurement
+            // has ended (a pause of a second or two that no frame or tick figure includes).
+            // -Dlightning.heap=false turns it off; an explicit parts list decides for itself.
+            String heap = Boolean.parseBoolean(System.getProperty("lightning.heap", "true")) ? " --heap" : "";
+            dev.lightning.capture.CaptureOptions o = dev.lightning.capture.Automation.options("--timeout " + duration + heap);
             recorder.start(o, new Recorder.Listener() {
                 @Override
                 public void started(String message) {

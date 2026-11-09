@@ -54,13 +54,19 @@ public record CaptureOptions(
         return out;
     }
 
+    /** -Dlightning.heap=true/false overrides the config's memory snapshot setting (test benches set it). */
+    static boolean heapFlag(boolean configured) {
+        String flag = System.getProperty("lightning.heap");
+        return flag == null || flag.isBlank() ? configured : Boolean.parseBoolean(flag.trim());
+    }
+
     public static CaptureOptions defaults() {
         try {
             if (dev.lightning.LightningConfig.loaded()) {
                 return new CaptureOptions(dev.lightning.LightningConfig.TIMEOUT.get(), dev.lightning.LightningConfig.GPU.get(), 6, 160, dev.lightning.LightningConfig.GPU_EVERY.get(),
                         dev.lightning.LightningConfig.JAVA_SAMPLING.get(), dev.lightning.LightningConfig.SAMPLE_INTERVAL.get(), true,
                         dev.lightning.LightningConfig.MEMORY_TRACKING.get(), dev.lightning.LightningConfig.WORLD_TIMING.get(),
-                        dev.lightning.LightningConfig.HEAP_AT_END.get(), false, false, true, true, true, true, false, true);
+                        heapFlag(dev.lightning.LightningConfig.HEAP_AT_END.get()), false, false, true, true, true, true, false, true);
             }
         } catch (RuntimeException | LinkageError notAvailable) {
             // Outside the game (tests): built-in defaults.

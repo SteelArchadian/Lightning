@@ -1,14 +1,14 @@
 modLoader="javafml"
 loaderVersion="[4,)"
 license="LGPL-3.0-only"
-issueTrackerURL=""
+issueTrackerURL="https://github.com/SteelArchadian/Lightning/issues"
 
 [[mods]]
 modId="lightning"
 version="${mod_version}"
 displayName="Lightning"
 logoFile="lightning-icon.png"
-authors="Lightning project"
+authors="SteelArchadian"
 description='''
 Diagnostics and profiling for Minecraft: exact frame, tick and GPU section timings, per-chunk entity and block-entity cost, JVM sampling, memory and logs on one timeline.
 Commands: /lightning profiler start | stop | cancel | status

@@ -15,6 +15,7 @@ import java.nio.file.StandardCopyOption;
  *   <li>{@code -Dlightning.html=false}: skip the browser report (saves a few seconds per run)</li>
  *   <li>{@code -Dlightning.resultsFile=<path>}: also copy results.json to exactly this path</li>
  *   <li>{@code -Dlightning.windows=30}: split every capture into 30-second phases</li>
+ *   <li>{@code -Dlightning.heap=false}: no memory snapshot at the end of automatic captures (on by default)</li>
  *   <li>{@code -Dlightning.gpuEvery=1}, {@code -Dlightning.interval=10}: the same as those start options, without spaces</li>
  * </ul>
  */
@@ -34,7 +35,31 @@ public final class Automation {
         if (!interval.isEmpty()) args.append(" --interval ").append(interval);
         String extra = System.getProperty("lightning.options", "").trim().replace(',', ' ');
         if (!extra.isEmpty()) args.append(' ').append(extra);
-        return CaptureOptions.parse(args.toString().trim());
+        try {
+            return CaptureOptions.parse(args.toString().trim());
+        } catch (IllegalArgumentException e) {
+            // A typo in a flag or the config must not stop the game (start-up captures parse this
+            // while mods load): drop the parts nobody knows, then the flags, and say so.
+            org.slf4j.LoggerFactory.getLogger("Lightning").warn("Lightning: ignoring a bad capture setting: {}", e.getMessage());
+            String known = knownParts(modules);
+            String fallback = (base == null ? "" : base) + (known.isEmpty() ? "" : " --only " + known);
+            try {
+                return CaptureOptions.parse(fallback.trim());
+            } catch (IllegalArgumentException again) {
+                return CaptureOptions.parse(base == null ? "" : base.trim());
+            }
+        }
+    }
+
+    /** The comma-separated part names in {@code list} that exist, comma-separated again. */
+    static String knownParts(String list) {
+        StringBuilder out = new StringBuilder();
+        for (String m : list.toLowerCase(java.util.Locale.ROOT).replace(" ", "").split("[,+]")) {
+            if (!CaptureOptions.MODULES.contains(m)) continue;
+            if (out.length() > 0) out.append(',');
+            out.append(m);
+        }
+        return out.toString();
     }
 
     /** Seconds per automatic window phase (flag, else config), or 0 for none. */

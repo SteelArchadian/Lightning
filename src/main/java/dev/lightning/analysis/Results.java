@@ -19,13 +19,13 @@ import java.util.Set;
  * { schema_version, format, id, label, startedAt, mods,
  *   overhead: { gameThreadPct, backgroundCores }, modules: [parts recorded], options: "start options",
  *   io?: { totalMs, gameThreadMs }, loading?: { phases, steps, reloads, classLoading, threads, ... },
- *   whole: Phase, phases: { name: Phase, ... }, phaseOrder: [names],
+ *   whole: Phase, phases: { name: Phase, ... }, phaseOrder: [names], listeners[{thread, event (method that posted it), listener, mod, samples, threadPct, ms: per frame on Render thread, per tick on Server thread, else per second}], slowFrames{verdict, pools[], topSections[], sections[], methods[], memory{}, menuScreens{}},
  *   findings: [{severity, title}], contenders: [{title, size}], memorySnapshot? }
  * Phase = { seconds, fps, frameP50/P95/P99/Max, gpuFrameP50, tickP50/P95/Max, ticksOver50ms,
  *           allocationStalls, allocationStallMs, allocMBps, gcPauseMs, gcLongestPauseMs,
  *           liveSetMBp50, liveSetMBmax, heapMaxMB, coresByThreadPool{},
- *           topModsCpu[{mod, sharePct}], gpuMsPerFrame[{section, ms}], allocByMod[{mod, MBps}],
- *           spikes[{atSeconds, ms, section}] }
+ *           topModsCpu[{mod, sharePct}], gpuMsPerFrame[{section, ms}], allocByMod[{mod, MBps}], allocOnStackByMod[{mod, MBps}], ownModsCpu[{mod, sharePct}],
+ *           gpuUntimedMs, gpuQueueLagP50/P95, gpuFrameGapP50, spikes[{atSeconds, ms, section}] }
  * </pre>
  */
 final class Results {
@@ -59,7 +59,10 @@ final class Results {
         for (String m : r.capture.options.modules()) modules.add(m);
         root.add("modules", modules);
         root.addProperty("options", dev.lightning.capture.CaptureOptions.toArgs(r.capture.options));
-        root.add("run", runHeader());
+        JsonObject run = runHeader();
+        root.add("run", run);
+        // Per-mod cost in absolute units for comparing the same scenario on two machines.
+        if (r.jfr != null) root.add("crosspc", CrossPc.build(r, run));
         if (r.jfr != null && !r.jfr.io.isEmpty()) {
             long total = 0, game = 0;
             for (long[] v : r.jfr.io.values()) {
@@ -72,6 +75,26 @@ final class Results {
             root.add("io", io);
         }
         root.add("whole", stat(Phases.whole(r)));
+        SlowFrames slow = r.slow();
+        if (slow != null) root.add("slowFrames", slowFrames(slow));
+        SlowFrames slowTicks = r.slowTicks();
+        if (slowTicks != null) root.add("slowTicks", slowFrames(slowTicks));
+        java.util.List<Listeners.Row> listeners = Listeners.of(r);
+        if (!listeners.isEmpty()) {
+            JsonArray a = new JsonArray();
+            for (Listeners.Row l : listeners) {
+                JsonObject x = new JsonObject();
+                x.addProperty("thread", l.thread());
+                x.addProperty("event", l.event());
+                x.addProperty("listener", l.listener());
+                x.addProperty("mod", l.mod());
+                x.addProperty("samples", l.samples());
+                x.addProperty("threadPct", round(l.threadPct(), 2));
+                x.addProperty("ms", round(l.ms(), 3));
+                a.add(x);
+            }
+            root.add("listeners", a);
+        }
         JsonObject phases = new JsonObject();
         JsonArray order = new JsonArray();
         Map<String, Integer> seen = new HashMap<>();
@@ -108,6 +131,108 @@ final class Results {
             contenders.add(o);
         }
         root.add("contenders", contenders);
+        if (r.jfr != null && !r.jfr.gcs.isEmpty()) {
+            // The collection with the longest pause, with G1's detail when recorded (0.5.16+).
+            JfrDigest.Gc worst = r.jfr.gcs.stream().max((a, b) -> Long.compare(a.longestPause(), b.longestPause())).get();
+            JsonObject g = new JsonObject();
+            g.addProperty("gcId", worst.gcId());
+            g.addProperty("atSeconds", round((worst.time() - r.capture.startNanos) / 1e9, 2));
+            g.addProperty("name", worst.name());
+            g.addProperty("cause", worst.cause());
+            g.addProperty("pauseMs", ms(worst.longestPause()));
+            JfrDigest.GcDetail d = r.jfr.gcDetails.get(worst.gcId());
+            if (d != null) {
+                g.addProperty("type", d.type);
+                g.addProperty("evacuationFailed", d.evacuationFailed);
+                g.addProperty("evacuationFailedObjects", d.failedObjects);
+                g.addProperty("evacuationFailedMB", round(d.failedBytes / 1048576.0, 2));
+                g.addProperty("slowestPhase", d.slowestPhase);
+                g.addProperty("slowestPhaseMs", ms(d.slowestPhaseNanos));
+                if (d.tenuring >= 0) g.addProperty("tenuringThreshold", d.tenuring);
+                JsonObject refs = new JsonObject();
+                d.references.forEach(refs::addProperty);
+                g.add("references", refs);
+            }
+            root.add("gcLongest", g);
+            int failed = 0;
+            for (JfrDigest.GcDetail x : r.jfr.gcDetails.values()) if (x.evacuationFailed) failed++;
+            if (!r.jfr.gcDetails.isEmpty()) root.addProperty("gcEvacuationFailures", failed);
+        }
+        dev.lightning.capture.OtherProcesses.Usage other = r.capture.otherPrograms;
+        if (other != null) {
+            // Other programs' CPU over the capture (0.5.21+): a busy machine makes every number worse.
+            JsonObject m = new JsonObject();
+            m.addProperty("processors", other.processors());
+            m.addProperty("gameCores", round(other.ownCores(), 2));
+            m.addProperty("otherCores", round(other.otherCores(), 2));
+            m.addProperty("otherJavaPrograms", other.otherJava());
+            JsonArray top = new JsonArray();
+            for (var o : other.others()) {
+                if (o.cores() < 0.05 || top.size() == 10) break;
+                JsonObject x = new JsonObject();
+                x.addProperty("name", o.name());
+                x.addProperty("count", o.count());
+                x.addProperty("cores", round(o.cores(), 2));
+                top.add(x);
+            }
+            m.add("otherPrograms", top);
+            root.add("machineLoad", m);
+        }
+        if (r.jfr != null && !r.jfr.safepoints.isEmpty()) {
+            // Time to reach each safepoint (0.5.18+): not part of any GC pause or VM-operation duration.
+            JsonObject sp = new JsonObject();
+            long total = 0, max = 0;
+            int maxRunning = 0;
+            long[] bins = new long[5]; // <1, 1-10, 10-50, 50-200, >=200 ms
+            for (JfrDigest.SafepointSync p : r.jfr.safepoints) {
+                total += p.duration();
+                max = Math.max(max, p.duration());
+                maxRunning = Math.max(maxRunning, p.running());
+                long ms = p.duration() / 1_000_000L;
+                bins[ms < 1 ? 0 : ms < 10 ? 1 : ms < 50 ? 2 : ms < 200 ? 3 : 4]++;
+            }
+            sp.addProperty("count", r.jfr.safepoints.size());
+            sp.addProperty("syncTotalMs", ms(total));
+            sp.addProperty("syncMaxMs", ms(max));
+            sp.addProperty("maxRunningThreads", maxRunning);
+            JsonObject hist = new JsonObject();
+            String[] names = {"under1ms", "1to10ms", "10to50ms", "50to200ms", "over200ms"};
+            for (int i = 0; i < 5; i++) hist.addProperty(names[i], bins[i]);
+            sp.add("histogram", hist);
+            JsonArray longest = new JsonArray();
+            r.jfr.safepoints.stream().sorted((a, b) -> Long.compare(b.duration(), a.duration())).limit(5).forEach(p -> {
+                JsonObject o = new JsonObject();
+                o.addProperty("atSeconds", round((p.time() - r.capture.startNanos) / 1e9, 2));
+                o.addProperty("ms", ms(p.duration()));
+                o.addProperty("runningThreads", p.running());
+                o.addProperty("iterations", p.iterations());
+                JsonObject sampled = new JsonObject();
+                r.jfr.poolsBetween(p.time(), p.time() + p.duration()).forEach(sampled::addProperty);
+                o.add("sampledDuring", sampled);
+                longest.add(o);
+            });
+            sp.add("longest", longest);
+            root.add("safepoints", sp);
+        }
+        if (r.jfr != null && r.jfr.outsideTlabSeen) {
+            // -Dlightning.bigAllocs=true: allocations at or over half a G1 region (humongous), by site.
+            JsonObject big = new JsonObject();
+            big.addProperty("thresholdMB", round(r.jfr.bigThreshold / 1048576.0, 1));
+            JsonArray sites = new JsonArray();
+            for (JfrDigest.BigAlloc a : r.jfr.bigAllocations()) {
+                if (sites.size() == 30) break;
+                JsonObject o = new JsonObject();
+                o.addProperty("type", a.type());
+                o.addProperty("mod", a.mod());
+                o.addProperty("site", a.site());
+                o.addProperty("count", a.count());
+                o.addProperty("totalMB", round(a.bytes() / 1048576.0, 1));
+                o.addProperty("largestMB", round(a.largest() / 1048576.0, 1));
+                sites.add(o);
+            }
+            big.add("sites", sites);
+            root.add("bigAllocations", big);
+        }
         if (r.data.heap() != null) {
             JsonObject heap = new JsonObject();
             heap.addProperty("liveMB", r.data.heap().totalBytes >> 20);
@@ -117,6 +242,19 @@ final class Results {
                 owners.addProperty(e.getKey(), e.getValue()[0] >> 20);
             }
             heap.add("byOwnerMB", owners);
+            // Plain arrays split by allocating code, from JFR old-object samples (estimates).
+            JsonArray arrays = new JsonArray();
+            for (ArrayOwners.Row a : r.arrayOwners()) {
+                if (a.bytes() < (1 << 20) || arrays.size() == 30) break;
+                JsonObject o = new JsonObject();
+                o.addProperty("type", a.type());
+                o.addProperty("mod", a.mod());
+                o.addProperty("site", a.site());
+                o.addProperty("estMB", a.bytes() >> 20);
+                o.addProperty("samples", a.samples());
+                arrays.add(o);
+            }
+            if (!arrays.isEmpty()) heap.add("arraysBySite", arrays);
             root.add("memorySnapshot", heap);
         }
         return root;
@@ -186,9 +324,12 @@ final class Results {
         s.poolCores().entrySet().stream().limit(15).forEach(e -> pools.addProperty(e.getKey(), round(e.getValue(), 2)));
         o.add("coresByThreadPool", pools);
         o.add("topModsCpu", topModsCpu(s.from(), s.to()));
+        o.add("ownModsCpu", ownModsCpu(s.from(), s.to()));
         o.add("gpuMsPerFrame", gpuSections(s.from(), s.to()));
         renderSections(o, s.from(), s.to());
-        o.add("allocByMod", allocByMod(s.from(), s.to()));
+        gpuCoverage(o, s.frameGpu(), s.from(), s.to());
+        o.add("allocByMod", allocByMod(s.from(), s.to(), false));
+        o.add("allocOnStackByMod", allocByMod(s.from(), s.to(), true));
         o.add("spikes", spikes(s.from(), s.to()));
         return o;
     }
@@ -203,6 +344,33 @@ final class Results {
             }
             return out;
         });
+    }
+
+    /**
+     * Share of all CPU samples in the interval whose running code (innermost frame outside the JDK and
+     * libraries) belongs to each owner. Unlike topModsCpu, a mod that only wraps or hooks vanilla code
+     * is not charged for the vanilla work under it.
+     */
+    private JsonArray ownModsCpu(long from, long to) {
+        JsonArray out = new JsonArray();
+        if (r.jfr == null) return out;
+        JfrDigest.Samples s = r.jfr.allSamples;
+        Map<Integer, String> ownerOfLeaf = new HashMap<>();
+        Map<String, Integer> counts = new HashMap<>();
+        int total = 0;
+        for (int i = 0; i < s.size; i++) {
+            if (s.time[i] < from || s.time[i] >= to) continue;
+            total++;
+            counts.merge(ownerOfLeaf.computeIfAbsent(s.leaf[i], l -> JfrDigest.ownCode(r.jfr.cpu, r.jfr.frames, l)), 1, Integer::sum);
+        }
+        final int all = Math.max(1, total);
+        counts.entrySet().stream().sorted(Map.Entry.<String, Integer>comparingByValue().reversed()).limit(15).forEach(e -> {
+            JsonObject m = new JsonObject();
+            m.addProperty("mod", e.getKey());
+            m.addProperty("sharePct", round(100.0 * e.getValue() / all, 2));
+            out.add(m);
+        });
+        return out;
     }
 
     /** Share of all CPU samples in the interval that had each mod's code on the stack. */
@@ -344,6 +512,122 @@ final class Results {
     }
 
     /**
+     * How much of the GPU frame the sections explain, and whether the GPU runs behind the CPU:
+     * gpuUntimedMs = mean GPU frame span minus the top-level sections' GPU time; gpuQueueLagP50 = how
+     * long after submission the GPU reached a frame's first command (near 0: the GPU waits for the
+     * CPU; large: GPU-bound); gpuFrameGapP50 = GPU time between one frame span's end and the next
+     * one's start (the swap, present and anything else outside the frame's sections, or idle).
+     */
+    private void gpuCoverage(JsonObject o, Stats frameGpu, long from, long to) {
+        if (frameGpu.count() > 0 && o.has("renderSections")) {
+            double timed = 0;
+            for (var e : o.getAsJsonArray("renderSections")) {
+                JsonObject x = e.getAsJsonObject();
+                if (x.has("gpuMs") && !x.get("section").getAsString().contains(" › ")) timed += x.get("gpuMs").getAsDouble();
+            }
+            if (timed > 0) o.addProperty("gpuUntimedMs", ms(Math.max(0, frameGpu.mean() - timed * 1e6)));
+        }
+        var gpu = r.gpu();
+        if (gpu == null || gpu.lagCount() == 0) return;
+        long[] lag = new long[gpu.lagCount()], gap = new long[gpu.lagCount()];
+        int n = 0;
+        for (int i = 0; i < gpu.lagCount(); i++) {
+            long t = gpu.lagCpuTime(i);
+            if (t < from || t >= to) continue;
+            lag[n] = gpu.queueLagNanos(i);
+            gap[n] = gpu.frameGapNanos(i);
+            n++;
+        }
+        if (n == 0) return;
+        Stats l = Stats.of(lag, n), g = Stats.of(gap, n);
+        o.addProperty("gpuQueueLagP50", ms(l.p50()));
+        o.addProperty("gpuQueueLagP95", ms(l.p95()));
+        if (g.count() > 0) o.addProperty("gpuFrameGapP50", ms(g.p50()));
+    }
+
+    /** Slow gameplay frames vs normal ones (see SlowFrames). */
+    private static JsonObject slowFrames(SlowFrames s) {
+        JsonObject o = new JsonObject();
+        o.addProperty("screensRecorded", s.screensKnown);
+        o.addProperty("playFrames", s.playFrames);
+        o.addProperty("menuFrames", s.menuFrames);
+        o.addProperty("menuSlowFrames", s.menuSlow);
+        JsonObject screens = new JsonObject();
+        s.menuScreens.forEach((k, v) -> {
+            JsonObject x = new JsonObject();
+            x.addProperty("frames", v[0]);
+            x.addProperty("slow", v[1]);
+            screens.add(k, x);
+        });
+        o.add("menuScreens", screens);
+        o.addProperty("playP50", ms(s.playP50));
+        o.addProperty("slowOverMs", ms(s.threshold));
+        o.addProperty("normalUnderMs", ms(s.normalLimit));
+        o.addProperty("slow", s.slowCount);
+        o.addProperty("normal", s.normalCount);
+        o.addProperty("slowMeanMs", round(s.slowMeanMs, 2));
+        o.addProperty("normalMeanMs", round(s.normalMeanMs, 2));
+        o.addProperty("verdict", s.verdict);
+        JsonArray pools = new JsonArray();
+        for (SlowFrames.Pool p : s.pools) {
+            JsonObject x = new JsonObject();
+            x.addProperty("pool", p.pool());
+            if (p.coresSlow() >= 0) {
+                x.addProperty("coresSlowSeconds", round(p.coresSlow(), 2));
+                x.addProperty("coresCalmSeconds", round(p.coresCalm(), 2));
+                x.addProperty("extraCores", round(p.extraCores(), 2));
+            }
+            if (!Double.isNaN(p.sampleRatio())) x.addProperty("sampleRatio", round(p.sampleRatio(), 2));
+            pools.add(x);
+        }
+        o.add("pools", pools);
+        o.add("topSections", diffs(s.topSections));
+        o.add("sections", diffs(s.sections));
+        o.add("methods", diffs(s.methods));
+        JsonObject mem = new JsonObject();
+        if (s.slowInGcPct >= 0) {
+            mem.addProperty("slowInGcPct", round(s.slowInGcPct, 1));
+            mem.addProperty("normalInGcPct", round(s.normalInGcPct, 1));
+        }
+        if (s.slowInVmOpPct >= 0) {
+            mem.addProperty("slowInVmPausePct", round(s.slowInVmOpPct, 1));
+            mem.addProperty("normalInVmPausePct", round(s.normalInVmOpPct, 1));
+            if (s.slowInSyncPct >= 0) {
+                mem.addProperty("slowInSafepointSyncPct", round(s.slowInSyncPct, 1));
+                mem.addProperty("normalInSafepointSyncPct", round(s.normalInSyncPct, 1));
+            }
+        }
+        if (s.allocSlowMBps >= 0) {
+            mem.addProperty("allocSlowMBps", Math.round(s.allocSlowMBps));
+            mem.addProperty("allocNormalMBps", Math.round(s.allocNormalMBps));
+        }
+        if (s.heapSlowPct >= 0) {
+            mem.addProperty("heapSlowPct", round(s.heapSlowPct, 1));
+            mem.addProperty("heapNormalPct", round(s.heapNormalPct, 1));
+        }
+        o.add("memory", mem);
+        return o;
+    }
+
+    private static JsonArray diffs(java.util.List<SlowFrames.Diff> list) {
+        JsonArray out = new JsonArray();
+        for (SlowFrames.Diff d : list) {
+            JsonObject x = new JsonObject();
+            x.addProperty("name", d.name());
+            if (!d.owner().isEmpty()) x.addProperty("owner", d.owner());
+            x.addProperty("slowMs", round(d.slowMs(), 3));
+            x.addProperty("normalMs", round(d.normalMs(), 3));
+            x.addProperty("extraMs", round(d.extraMs(), 3));
+            if (d.slowPct() >= 0) {
+                x.addProperty("slowFramesPct", round(d.slowPct(), 1));
+                x.addProperty("normalFramesPct", round(d.normalPct(), 1));
+            }
+            out.add(x);
+        }
+        return out;
+    }
+
+    /**
      * 1% and 0.1% lows: 1000 / (mean frame time of the slowest 1% / 0.1% of frames), in FPS. The
      * slowest ceil(1% of frames) frames are used, at least one.
      */
@@ -366,13 +650,15 @@ final class Results {
         }
     }
 
-    private JsonArray allocByMod(long from, long to) {
+    /** onStack=false: by owner of the allocating code; true: by innermost add-on mod anywhere on the stack. */
+    private JsonArray allocByMod(long from, long to, boolean onStack) {
         JsonArray out = new JsonArray();
         if (r.jfr == null) return out;
         JfrDigest j = r.jfr;
         long[] bytes = new long[j.allocModNames.size()];
         for (int i = 0; i < j.allocCount; i++) {
-            if (j.allocTime[i] >= from && j.allocTime[i] < to) bytes[j.allocMod[i]] += j.allocWeightAt[i];
+            int mod = onStack ? j.allocStackMod[i] : j.allocMod[i];
+            if (mod >= 0 && j.allocTime[i] >= from && j.allocTime[i] < to) bytes[mod] += j.allocWeightAt[i];
         }
         double seconds = Math.max(1e-9, (to - from) / 1e9);
         Integer[] order = new Integer[bytes.length];

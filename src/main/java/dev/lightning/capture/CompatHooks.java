@@ -10,12 +10,20 @@ public final class CompatHooks {
     private CompatHooks() {}
 
     public static void push(String name) {
-        Track t = Capture.track();
-        if (t != null) t.pushCompat(name);
+        try {
+            Track t = Capture.track();
+            if (t != null) t.pushCompat(name);
+        } catch (RuntimeException e) {
+            Guard.failed("compat push", e);
+        }
     }
 
     public static void pop() {
-        Track t = Capture.track();
-        if (t != null) t.popCompat();
+        try {
+            Track t = Capture.track();
+            if (t != null) t.popCompat();
+        } catch (RuntimeException e) {
+            Guard.failed("compat pop", e);
+        }
     }
 }

@@ -16,6 +16,18 @@ import org.spongepowered.asm.mixin.injection.At;
 abstract class MinecraftMixin {
     @ModifyReturnValue(method = "constructProfiler", at = @At("RETURN"))
     private ProfilerFiller lightning$record(ProfilerFiller filler) {
-        return SectionProfiler.wrapClient(filler);
+        ProfilerFiller wrapped = SectionProfiler.wrapClient(filler);
+        if (wrapped != filler) {
+            // Tag the coming frame with the open screen or overlay (menus are not gameplay).
+            try {
+                Minecraft mc = (Minecraft) (Object) this;
+                Object open = mc.getOverlay() != null ? mc.getOverlay() : mc.screen;
+                dev.lightning.capture.Track t = dev.lightning.capture.Capture.track();
+                if (t != null) t.screen(open == null ? null : open.getClass().getName());
+            } catch (RuntimeException e) {
+                dev.lightning.capture.Guard.failed("screen tag", e);
+            }
+        }
+        return wrapped;
     }
 }

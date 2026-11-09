@@ -39,49 +39,77 @@ public final class SectionProfiler implements ProfilerFiller {
 
     @Override
     public void startTick() {
-        Track t = Capture.track();
-        if (t != null) t.tickStart();
+        try {
+            Track t = Capture.track();
+            if (t != null) t.tickStart();
+        } catch (RuntimeException e) {
+            Guard.failed("profiler startTick", e);
+        }
     }
 
     @Override
     public void endTick() {
-        Track t = Capture.track();
-        if (t != null) t.tickEnd();
+        try {
+            Track t = Capture.track();
+            if (t != null) t.tickEnd();
+        } catch (RuntimeException e) {
+            Guard.failed("profiler endTick", e);
+        }
     }
 
     @Override
     public void push(String name) {
-        Track t = Capture.track();
-        if (t != null) t.push(name);
+        try {
+            Track t = Capture.track();
+            if (t != null) t.push(name);
+        } catch (RuntimeException e) {
+            Guard.failed("profiler push", e);
+        }
     }
 
     @Override
     public void push(Supplier<String> name) {
-        Track t = Capture.track();
-        if (t != null) t.push(name);
+        try {
+            Track t = Capture.track();
+            if (t != null) t.push(name);
+        } catch (RuntimeException e) {
+            Guard.failed("profiler push", e);
+        }
     }
 
     @Override
     public void pop() {
-        Track t = Capture.track();
-        if (t != null) t.pop();
+        try {
+            Track t = Capture.track();
+            if (t != null) t.pop();
+        } catch (RuntimeException e) {
+            Guard.failed("profiler pop", e);
+        }
     }
 
     @Override
     public void popPush(String name) {
-        Track t = Capture.track();
-        if (t != null) {
-            t.pop();
-            t.push(name);
+        try {
+            Track t = Capture.track();
+            if (t != null) {
+                t.pop();
+                t.push(name);
+            }
+        } catch (RuntimeException e) {
+            Guard.failed("profiler popPush", e);
         }
     }
 
     @Override
     public void popPush(Supplier<String> name) {
-        Track t = Capture.track();
-        if (t != null) {
-            t.pop();
-            t.push(name);
+        try {
+            Track t = Capture.track();
+            if (t != null) {
+                t.pop();
+                t.push(name);
+            }
+        } catch (RuntimeException e) {
+            Guard.failed("profiler popPush", e);
         }
     }
 

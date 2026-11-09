@@ -24,12 +24,16 @@ final class Findings {
         f.frames();
         f.gpu();
         f.renderSpikes();
+        f.slowFrames();
         f.server();
         f.world();
         f.memory();
         f.jvmPauses();
+        f.otherPrograms();
+        f.safepointSync();
         f.blocking();
         f.threadsCpu();
+        f.listeners();
         f.logs();
         f.lightning();
         Map<String, Integer> order = Map.of("high", 0, "medium", 1, "low", 2, "info", 3);
@@ -167,22 +171,75 @@ final class Findings {
                         + (r.gpu() != null ? String.format(Locale.ROOT, " The timer calls themselves took %s per frame of render-thread time (included in the CPU figure).",
                         Stats.ms((double) r.gpu().glNanos() / Math.max(1, r.frames.count()))) : ""),
                 "sections:render");
+        turnTaking(display < 0 ? 0 : t.tree.total[display] / frames, cpu, gpu);
+    }
+
+    /**
+     * CPU and GPU take turns instead of overlapping: the driver only starts the frame's GPU work at
+     * the buffer swap, so the swap waits about the whole GPU frame and the GPU reaches each frame's
+     * first command about one CPU frame late, while the GPU itself is far from busy. Seen with
+     * NVIDIA's threaded optimisation turned off (Sodium does this on NVIDIA/Windows).
+     */
+    private void turnTaking(double swapPer, double cpu, double gpu) {
+        var timer = r.gpu();
+        if (timer == null || timer.lagCount() < 30 || cpu <= 0) return;
+        long[] lag = new long[timer.lagCount()];
+        for (int i = 0; i < lag.length; i++) lag[i] = timer.queueLagNanos(i);
+        double lagP50 = Stats.of(lag, lag.length).p50();
+        double frame = r.frames.mean();
+        boolean swapIsGpu = swapPer > 0.5e6 && Math.abs(swapPer - gpu) < 0.35 * gpu;
+        boolean lagIsCpu = lagP50 > 0.5e6 && Math.abs(lagP50 - cpu) < 0.4 * cpu;
+        if (!swapIsGpu || !lagIsCpu || gpu > 0.75 * frame) return;
+        boolean sodiumWorkaround = logMentions("NVIDIA_THREADED_OPTIMIZATIONS");
+        add("medium", "frames", "CPU and GPU take turns instead of working in parallel",
+                String.format(Locale.ROOT, "The buffer swap waits %s per frame, about the GPU's whole frame (%s), and the GPU reaches each frame's first command %s "
+                                + "after it was submitted, about the render thread's CPU work (%s). So the GPU only starts a frame at the swap and is busy "
+                                + "only %s of the frame time: CPU and GPU time add up instead of overlapping. Usual cause: the driver's threaded optimisation is off%s. "
+                                + "Fix: flush GL commands during the frame (glFlush after the sky and opaque passes, e.g. Optimal's gpuflush; "
+                                + "measured on an RTX 5090 with shaders: 149 to 225 FPS) so the GPU starts while the CPU is still recording.",
+                        Stats.ms(swapPer), Stats.ms(gpu), Stats.ms(lagP50), Stats.ms(cpu), pct(gpu / frame),
+                        sodiumWorkaround ? " (the game log shows Sodium's NVIDIA_THREADED_OPTIMIZATIONS_BROKEN workaround, which turns it off)" : ""),
+                "Swap wait from the updateDisplay section; GPU queue lag = GPU timestamp of the frame's first marker minus the GPU clock when it was submitted.",
+                "sections:render");
+    }
+
+    /** True if the game's latest.log (first 8 MB) contains the text; false when there is no log. */
+    private static boolean logMentions(String text) {
+        java.nio.file.Path log = java.nio.file.Path.of("logs", "latest.log");
+        try (var in = java.nio.file.Files.newBufferedReader(log, java.nio.charset.StandardCharsets.ISO_8859_1)) {
+            long read = 0;
+            for (String line; (line = in.readLine()) != null && read < 8L << 20; read += line.length()) {
+                if (line.contains(text)) return true;
+            }
+        } catch (java.io.IOException | RuntimeException e) {
+            return false;
+        }
+        return false;
     }
 
     private void renderSpikes() {
         SpanDigest.ThreadSpans t = r.render;
         if (t == null || r.frames.count() < 30) return;
-        long threshold = Math.max((long) (r.frames.p50() * 2.5), r.frames.p50() + 10_000_000L);
-        int count = 0;
-        for (int i = 0; i < t.ticks.size(); i++) if (t.ticks.duration[i] > threshold) count++;
+        // Gameplay frames only; frames with a menu open are counted apart.
+        SlowFrames slow = r.slow();
+        long p50 = slow != null ? slow.playP50 : r.frames.p50();
+        long threshold = Math.max((long) (p50 * 2.5), p50 + 10_000_000L);
+        int count = 0, menu = 0;
+        for (int i = 0; i < t.ticks.size(); i++) {
+            if (t.ticks.duration[i] <= threshold) continue;
+            if (r.menuFrame(i)) menu++;
+            else count++;
+        }
         if (count == 0) return;
         List<SpanDigest.Spike> spikes = t.spikes();
         StringBuilder d = new StringBuilder();
-        d.append(count).append(count == 1 ? " frame took longer than " : " frames took longer than ").append(Stats.ms(threshold))
+        d.append(count).append(count == 1 ? " gameplay frame took longer than " : " gameplay frames took longer than ").append(Stats.ms(threshold))
                 .append(String.format(Locale.ROOT, " (%s per minute). ", f1(count / r.seconds() * 60)));
+        if (menu > 0) d.append(menu).append(" more had a menu open and are left out. ");
         int shown = 0;
         for (SpanDigest.Spike s : spikes) {
-            if (s.duration <= threshold || shown == 3) break;
+            if (shown == 3) break;
+            if (s.duration <= threshold || r.menuFrame(s.tick)) continue;
             d.append("At ").append(f1((s.start - r.capture.startNanos) / 1e9)).append(" s: ").append(Stats.ms(s.duration))
                     .append(", mostly ").append(dominant(t, s)).append(context(s.start, s.start + s.duration)).append(". ");
             shown++;
@@ -191,6 +248,67 @@ final class Findings {
         add(severity, "frames", "Frame-time spikes", d.toString(),
                 "Spike detail is the exact section timeline of each slow frame; overlaps with GC, JVM pauses and logs are coincidences in time, not proof of cause.",
                 "spikes:render");
+    }
+
+    /**
+     * Slow gameplay frames against normal ones: menus set apart, then what else was busy at the same
+     * moment (background pools, GC, JVM pauses, allocation, heap) and which sections and methods take
+     * longer in slow frames.
+     */
+    private void slowFrames() {
+        SlowFrames s = r.slow();
+        if (s == null) return;
+        if (s.menuSlow > 0) {
+            StringBuilder m = new StringBuilder();
+            s.menuScreens.entrySet().stream().filter(e -> e.getValue()[1] > 0).sorted((a, b) -> b.getValue()[1] - a.getValue()[1]).limit(4)
+                    .forEach(e -> m.append(m.length() == 0 ? "" : ", ").append(e.getKey()).append(" (").append(e.getValue()[1]).append(" slow of ").append(e.getValue()[0]).append(")"));
+            add("info", "frames", String.format(Locale.ROOT, "%d slow frames were in menus, not gameplay", s.menuSlow),
+                    "These frames had a screen or overlay open: " + m + ". Menus run at their own frame cap and some open windows, so they are left out of the gameplay frame analysis.",
+                    "The open screen is recorded at the start of every frame.", "frames");
+        }
+        slowReport(s);
+        SlowFrames ticks = r.slowTicks();
+        if (ticks != null) slowReport(ticks);
+    }
+
+    /** The comparison finding for slow frames, or (server variant) slow server ticks. */
+    private void slowReport(SlowFrames s) {
+        if (s.slowCount < 5) return;
+        StringBuilder d = new StringBuilder();
+        d.append(String.format(Locale.ROOT, "%d gameplay frames took over %s (mean %.1f ms) vs %d normal frames (up to %s, mean %.1f ms). ",
+                s.slowCount, Stats.ms(s.threshold), s.slowMeanMs, s.normalCount, Stats.ms(s.normalLimit), s.normalMeanMs));
+        if (!s.verdict.isEmpty()) d.append(s.verdict).append(' ');
+        String top = s.sectionLine(s.topSections, 4), deep = s.sectionLine(s.sections, 5);
+        if (!top.isEmpty()) d.append("Extra time per slow frame by top-level step: ").append(top).append(". ");
+        if (!deep.isEmpty()) d.append("Where it lands: ").append(deep).append(". ");
+        String methods = s.methodLine(6);
+        if (!methods.isEmpty()) d.append("Code that runs longer in slow frames (render thread): ").append(methods).append(". ");
+        StringBuilder pools = new StringBuilder();
+        int shown = 0;
+        for (SlowFrames.Pool p : s.pools) {
+            if (p.coresSlow() >= 0 ? p.extraCores() < 0.15 : p.sampleRatio() < 1.2) continue;
+            if (shown > 0) pools.append(", ");
+            pools.append(p.pool());
+            if (p.coresSlow() >= 0) pools.append(String.format(Locale.ROOT, " %.1f→%.1f cores", p.coresCalm(), p.coresSlow()));
+            if (!Double.isNaN(p.sampleRatio())) pools.append(String.format(Locale.ROOT, " (%.1f× in slow frames)", p.sampleRatio()));
+            if (++shown == 5) break;
+        }
+        if (pools.length() > 0) d.append("Background work that rises with slow frames (calm → slow seconds): ").append(pools).append(". ");
+        if (s.heapSlowPct >= 0) d.append(String.format(Locale.ROOT, "Heap %.0f%% full in slow frames vs %.0f%% in normal ones", s.heapSlowPct, s.heapNormalPct));
+        if (s.slowInGcPct >= 0) d.append(String.format(Locale.ROOT, "; a GC was running in %.0f%% vs %.0f%%", s.slowInGcPct, s.normalInGcPct));
+        if (s.allocSlowMBps >= 0) d.append(String.format(Locale.ROOT, "; allocation %.0f vs %.0f MB/s", s.allocSlowMBps, s.allocNormalMBps));
+        d.append('.');
+        String title = s.verdict.isEmpty() ? "What differs in slow frames" : "What slow frames have in common";
+        String basis = "Slow = over 1.8× the median gameplay frame (and +4 ms); normal = under 1.2×. Pool cores from per-thread CPU once a second (the third of seconds with the most slow frames vs the third with the fewest); "
+                + "\"× in slow frames\" compares how often the pool is caught running by CPU samples inside slow vs normal frames. Method time is the method's share of a frame's "
+                + "render-thread samples times the frame time. Correlation in time, not proof of cause.";
+        String detail = d.toString();
+        if (s.server) {
+            title = SlowFrames.forTicks(title).replace("slow ticks", "slow server ticks");
+            detail = SlowFrames.forTicks(detail);
+            basis = SlowFrames.forTicks(basis) + " Server ticks are judged by their work, without the wait for the next tick.";
+        }
+        add(s.verdict.isEmpty() ? "info" : "medium", s.server ? "server" : "frames", title, detail, basis, s.server ? "sections:server" : "frames");
     }
 
     /** The deepest section that covers most of a spike. */
@@ -220,6 +338,9 @@ final class Findings {
             long stall = 0;
             for (JfrDigest.Pause p : r.jfr.allocationStalls) if (p.time() < to && p.time() + p.duration() > from) stall = Math.max(stall, p.duration());
             if (stall > 0) parts.add("allocation stall " + Stats.ms(stall));
+            long sync = 0;
+            for (JfrDigest.SafepointSync p : r.jfr.safepoints) if (p.time() < to && p.time() + p.duration() > from) sync = Math.max(sync, p.duration());
+            if (sync > 2_000_000) parts.add("safepoint sync " + Stats.ms(sync));
             for (JfrDigest.Pause p : r.jfr.vmOperations) {
                 if (p.time() < to && p.time() + p.duration() > from && p.duration() > 2_000_000) {
                     parts.add("JVM " + p.detail() + " " + Stats.ms(p.duration()));
@@ -337,6 +458,7 @@ final class Findings {
         liveSet();
         heapSnapshot();
         deepMemory();
+        bigAllocations();
         if (r.jfr == null) return;
         long stalled = 0;
         Map<String, Long> byThread = new HashMap<>();
@@ -360,21 +482,55 @@ final class Findings {
             d.append("Top allocation sites: ");
             r.jfr.allocBySite.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue().weight, a.getValue().weight)).limit(5)
                     .forEach(e -> d.append(e.getKey()).append(" (").append(pct((double) e.getValue().weight / r.jfr.allocationWeight)).append("); "));
+            if (r.jfr.allocCappedSamples > 0) {
+                d.append(String.format(Locale.ROOT, "%d sample%s claimed over 1 GB each (%.1f GB cut); each was capped at 1 GB so one lucky stack is not blamed for a long gap. ",
+                        r.jfr.allocCappedSamples, r.jfr.allocCappedSamples == 1 ? "" : "s", r.jfr.allocCappedBytes / 1e9));
+            }
             add(rate > 1500 ? "medium" : "info", "memory", "Allocation pressure", d.toString(),
                     "JFR allocation samples, weighted by bytes: an estimate of where memory is allocated, not of what is retained.", "allocations");
         }
         if (!r.jfr.gcs.isEmpty()) {
             long pauses = 0, longest = 0;
+            JfrDigest.Gc worst = null;
             for (JfrDigest.Gc gc : r.jfr.gcs) {
                 pauses += gc.sumOfPauses();
-                longest = Math.max(longest, gc.longestPause());
+                if (gc.longestPause() > longest) {
+                    longest = gc.longestPause();
+                    worst = gc;
+                }
             }
             add(longest > 50_000_000L ? "medium" : "info", "memory", "Garbage collection",
-                    String.format(Locale.ROOT, "%d collections (%s per second) by %s/%s; pauses %s in total, longest %s.",
+                    String.format(Locale.ROOT, "%d collections (%s per second) by %s/%s; pauses %s in total, longest %s.%s",
                             r.jfr.gcs.size(), f1(r.jfr.gcs.size() / r.seconds()), r.jfr.youngCollector, r.jfr.oldCollector,
-                            Stats.ms(pauses), Stats.ms(longest)),
-                    "JFR garbage-collection events.", "memory");
+                            Stats.ms(pauses), Stats.ms(longest), worst == null ? "" : gcDetail(worst)),
+                    "JFR garbage-collection events, with G1's per-collection detail events where recorded.", "memory");
         }
+    }
+
+    /** " The longest (#id, cause, kind): ..." from G1's detail events, or "" when none were recorded. */
+    private String gcDetail(JfrDigest.Gc gc) {
+        JfrDigest.GcDetail g = r.jfr.gcDetails.get(gc.gcId());
+        if (g == null) return "";
+        StringBuilder d = new StringBuilder(String.format(Locale.ROOT, " The longest (collection #%d, %s%s)", gc.gcId(), gc.cause(),
+                g.type.isEmpty() ? "" : ", " + g.type));
+        d.append(g.evacuationFailed ? String.format(Locale.ROOT,
+                ": %,d objects (%.1f MB) could not be moved (no free room to copy them, or, on Java 22+, their region was pinned by native code), so they were kept in place", g.failedObjects, g.failedBytes / 1048576.0)
+                : ": evacuation succeeded");
+        // G1 only reports some pause phases (reference processing, class unloading); name one only when it explains the pause.
+        if (!g.slowestPhase.isEmpty() && g.slowestPhaseNanos * 4 >= gc.longestPause()) {
+            d.append("; slowest phase ").append(g.slowestPhase).append(' ').append(Stats.ms(g.slowestPhaseNanos));
+        }
+        if (!g.references.isEmpty()) {
+            d.append("; references processed:");
+            g.references.forEach((type, count) -> d.append(' ').append(type).append(' ').append(count));
+        }
+        if (g.tenuring >= 0) d.append("; tenuring threshold ").append(g.tenuring);
+        d.append('.');
+        int failed = 0;
+        for (JfrDigest.GcDetail x : r.jfr.gcDetails.values()) if (x.evacuationFailed) failed++;
+        if (failed > 0) d.append(String.format(Locale.ROOT, " %d of %d collections could not move some objects (too little free room, or regions pinned by native code on Java 22+).",
+                failed, r.jfr.gcs.size()));
+        return d.toString();
     }
 
     /** Memory still in use after collections, against the maximum heap. */
@@ -384,13 +540,45 @@ final class Findings {
         double share = (double) w.liveP50() / w.heapMax(), peak = (double) w.liveMax() / w.heapMax();
         if (share < 0.6 && peak < 0.8) return;
         String severity = share > 0.75 || w.stalls() > 0 ? "high" : "medium";
+        String stalls = w.stalls() > 0 ? String.format(Locale.ROOT, " (%d such waits here, %s in total)", w.stalls(), Stats.ms(w.stallNanos())) : "";
+        HeapHistogram h = r.data.heap();
+        // A concurrent collector's "after clean-up" heap still holds floating garbage and pages it
+        // hasn't relocated yet; the snapshot's full collection measures what is really live.
+        if (h != null && h.totalBytes > 0 && w.liveP50() > h.totalBytes * 1.15) {
+            long lag = w.liveP50() - h.totalBytes;
+            double liveShare = (double) h.totalBytes / w.heapMax();
+            add(liveShare > 0.6 || w.stalls() > 0 ? severity : "medium", "memory", "The garbage collector runs behind",
+                    String.format(Locale.ROOT, "Live data is only %d MB (%s of the %d MB limit, measured by the full clean-up at the end), but after the "
+                                    + "collector's routine clean-ups typically %d MB (up to %d MB) was still in use: it is about %d MB behind. New memory "
+                                    + "was being taken at about %.0f MB/s%s. Less allocation gives it room to catch up (see the allocation findings); "
+                                    + "what is held is the smaller problem here (memory snapshot).",
+                            h.totalBytes >> 20, pct(liveShare), w.heapMax() >> 20, w.liveP50() >> 20, w.liveMax() >> 20, lag >> 20, w.allocMBps(), stalls),
+                    "Heap in use right after each collection, read once per second, against the class histogram's full collection; allocation rate from JFR samples.",
+                    "memory");
+            return;
+        }
         add(severity, "memory", "Memory still in use is close to the limit",
                 String.format(Locale.ROOT, "After each clean-up, typically %d MB (up to %d MB) was still in use, out of a %d MB limit (%s, peak %s). "
                                 + "New memory was being taken at about %.0f MB/s. With this little room the collector can't keep up, which is when the game "
-                                + "has to wait for memory%s. Options: a larger -Xmx, or reducing what is held (see the memory snapshot, /lightning heap).",
-                        w.liveP50() >> 20, w.liveMax() >> 20, w.heapMax() >> 20, pct(share), pct(peak), w.allocMBps(),
-                        w.stalls() > 0 ? String.format(Locale.ROOT, " (%d such waits here, %s in total)", w.stalls(), Stats.ms(w.stallNanos())) : ""),
+                                + "has to wait for memory%s. Reduce what is held (see the memory snapshot, /lightning heap) or what is allocated.",
+                        w.liveP50() >> 20, w.liveMax() >> 20, w.heapMax() >> 20, pct(share), pct(peak), w.allocMBps(), stalls),
                 "Heap in use right after collection, read once per second; allocation rate from JFR samples.", "memory");
+    }
+
+    private void bigAllocations() {
+        if (r.jfr == null || r.jfr.bigAllocs.isEmpty()) return;
+        List<JfrDigest.BigAlloc> big = r.jfr.bigAllocations();
+        long count = 0;
+        for (JfrDigest.BigAlloc a : big) count += a.count();
+        StringBuilder d = new StringBuilder(String.format(Locale.ROOT,
+                "%d objects of %.0f MB or more were allocated. The garbage collector stores these apart and may need extra collections for them. Largest sources: ",
+                count, r.jfr.bigThreshold / 1048576.0));
+        for (int i = 0; i < Math.min(5, big.size()); i++) {
+            JfrDigest.BigAlloc a = big.get(i);
+            d.append(String.format(Locale.ROOT, "%s %s in %s ×%d (up to %.0f MB); ", a.mod(), a.type(), a.site(), a.count(), a.largest() / 1048576.0));
+        }
+        add(count >= 10 ? "medium" : "low", "memory", String.format(Locale.ROOT, "%d very large allocations", count), d.toString(),
+                "JFR allocations outside thread buffers (-Dlightning.bigAllocs=true), kept at half a G1 region or more.", "memory");
     }
 
     private void deepMemory() {
@@ -423,17 +611,99 @@ final class Findings {
             if (n++ == 8) break;
             d.append(String.format(Locale.ROOT, "%s %d MB (%s); ", e.getKey(), e.getValue()[0] >> 20, pct((double) e.getValue()[0] / h.totalBytes)));
         }
-        d.append("Plain arrays can belong to any mod; a class count can't say which.");
+        List<ArrayOwners.Row> arrays = r.arrayOwners();
+        if (arrays.isEmpty()) {
+            d.append("Plain arrays can belong to any mod; a class count can't say which.");
+            // JFR's old-object sampler (which splits arrays by allocating code) records nothing under ZGC.
+            if (r.jfr != null && String.valueOf(r.jfr.youngCollector).contains("ZGC")) {
+                d.append(" To see whose they are with ZGC, add the deep part (heap dump), or run once with G1.");
+            }
+        } else {
+            long unknown = h.byOwner.getOrDefault(HeapHistogram.UNKNOWN_ARRAYS, new long[1])[0];
+            d.append(String.format(Locale.ROOT, "Plain arrays %d MB, by the code that allocated them (estimated from %d samples of objects still alive): ",
+                    unknown >> 20, r.jfr.oldSamples.size()));
+            int k = 0;
+            for (ArrayOwners.Row a : arrays) {
+                if (k++ == 6 || a.bytes() < (8L << 20)) break;
+                d.append(String.format(Locale.ROOT, "~%d MB %s from %s %s; ", a.bytes() >> 20, a.type(), a.mod(), shortName(a.site())));
+            }
+        }
         add("info", "memory", "What is filling memory", d.toString(),
                 String.format(Locale.ROOT, "JVM class histogram at the end of the capture (paused the game %s).", Stats.ms(h.pauseNanos)), "memory");
+    }
+
+    /**
+     * Waiting for every thread to stop before a safepoint operation. The operation's own time
+     * (GC pause, VM operation) leaves this wait out, so a long one shows up nowhere else.
+     */
+    private void safepointSync() {
+        if (r.jfr == null || r.jfr.safepoints.isEmpty()) return;
+        long total = 0, max = 0;
+        int over50 = 0, maxRunning = 0;
+        for (JfrDigest.SafepointSync p : r.jfr.safepoints) {
+            total += p.duration();
+            max = Math.max(max, p.duration());
+            if (p.duration() >= 50_000_000L) over50++;
+            maxRunning = Math.max(maxRunning, p.running());
+        }
+        if (total < 500_000_000L && max < 50_000_000L) return;
+        SlowFrames slow = r.slow();
+        String frames = slow == null || slow.slowInSyncPct < 0 ? ""
+                : String.format(Locale.ROOT, " %.0f%% of slow frames overlap a wait of 5 ms or more (normal frames: %.0f%%).", slow.slowInSyncPct, slow.normalInSyncPct);
+        add(max >= 200_000_000L || total >= 2_000_000_000L ? "high" : "medium", "jvm", "Threads slow to reach safepoints",
+                String.format(Locale.ROOT, "%d safepoints; waiting for every thread to stop took %s in total, longest %s (%d waits of 50 ms or more)%s.%s "
+                                + "Every thread that already stopped (rendering included) waits for the last one. The GC and VM-operation times leave this wait out. "
+                                + "Causes: the machine is oversubscribed (other heavy programs; see 'Other programs compete for the CPU'), a thread in a long loop without safepoint checks, or one in a native call declared critical (Linker.Option.critical), which never leaves the Java state, causes it.%s "
+                                + "To name it for certain, run with -XX:+SafepointTimeout -XX:SafepointTimeoutDelay=50 and the JVM prints the late thread to its console.",
+                        r.jfr.safepoints.size(), Stats.ms(total), Stats.ms(max), over50,
+                        maxRunning > 0 ? String.format(Locale.ROOT, "; up to %d threads were still running when a wait began", maxRunning) : "", frames,
+                        laggards()),
+                "JFR SafepointBegin (duration = time to synchronize) and SafepointStateSynchronization events.", "jvm");
+    }
+
+    /** Other programs using the CPU during the capture: they slow the game for reasons outside it. */
+    private void otherPrograms() {
+        dev.lightning.capture.OtherProcesses.Usage u = r.capture.otherPrograms;
+        // Ordinary desktop programs use a core or two; report only real competition.
+        if (u == null || u.otherCores() < Math.max(2.0, 0.15 * u.processors())) return;
+        double demand = u.ownCores() + u.otherCores();
+        boolean tight = demand >= 0.8 * u.processors();
+        StringBuilder top = new StringBuilder();
+        for (int i = 0; i < Math.min(5, u.others().size()); i++) {
+            var o = u.others().get(i);
+            top.append(String.format(Locale.ROOT, "%s%s %.1f cores; ", o.name(), o.count() > 1 ? " ×" + o.count() : "", o.cores()));
+        }
+        int java = u.otherJava();
+        add(tight ? "high" : "medium", "machine", "Other programs compete for the CPU",
+                String.format(Locale.ROOT, "Other programs used %.1f cores on average while this game used %.1f, out of %d logical processors (%.0f%% busy).%s Top: %s"
+                                + "Numbers from this capture (frame times, lows, safepoint waits, GC pauses) are worse than the game alone would give; compare only runs on a quiet machine.",
+                        u.otherCores(), u.ownCores(), u.processors(), 100 * demand / u.processors(),
+                        java > 0 ? String.format(Locale.ROOT, " %d other Java program%s (often other game instances) ran at the same time.", java, java == 1 ? "" : "s") : "",
+                        top),
+                "CPU time of every readable process at the start and end of the capture.", "machine");
+    }
+
+    /** " During the longest waits, Java code was sampled in: ..." or "". */
+    private String laggards() {
+        StringBuilder d = new StringBuilder();
+        r.jfr.safepoints.stream().filter(p -> p.duration() >= 50_000_000L).sorted((a, b) -> Long.compare(b.duration(), a.duration())).limit(3).forEach(p -> {
+            Map<String, Integer> pools = r.jfr.poolsBetween(p.time(), p.time() + p.duration());
+            if (pools.isEmpty()) return;
+            d.append(String.format(Locale.ROOT, "%s (%d thread%s still running): %s; ", Stats.ms(p.duration()), p.running(), p.running() == 1 ? "" : "s",
+                    String.join(", ", pools.keySet().stream().limit(4).toList())));
+        });
+        return d.length() == 0 ? "" : " Java code sampled during the longest waits (the late thread is usually among these): " + d.toString().trim();
     }
 
     private void jvmPauses() {
         if (r.jfr == null) return;
         Map<String, long[]> byOp = new HashMap<>();
+        Map<String, long[]> handshakes = new HashMap<>();
         for (JfrDigest.Pause p : r.jfr.vmOperations) {
             if (p.detail().contains("GC") || p.detail().startsWith("Z")) continue;
-            long[] agg = byOp.computeIfAbsent(p.detail(), k -> new long[3]);
+            // GC handshakes are part of the collector's concurrent work, not pauses of the game.
+            if (!p.stopsAll() && p.fromGc()) continue;
+            long[] agg = (p.stopsAll() ? byOp : handshakes).computeIfAbsent(p.detail(), k -> new long[3]);
             agg[0]++;
             agg[1] += p.duration();
             agg[2] = Math.max(agg[2], p.duration());
@@ -445,7 +715,28 @@ final class Findings {
                                 e.getValue()[0], Stats.ms(e.getValue()[1]), Stats.ms(e.getValue()[2]),
                                 e.getKey().contains("ThreadDump") || e.getKey().contains("GetThreadInfo")
                                         ? " Thread dumps usually come from a profiler or monitoring tool taking stack snapshots." : ""),
-                        "JFR VM-operation events (exact durations).", "jvm"));
+                        "JFR VM-operation events at a safepoint (exact durations).", "jvm"));
+        handshakes.entrySet().stream().filter(e -> e.getValue()[1] > 50_000_000L)
+                .sorted((a, b) -> Long.compare(b.getValue()[1], a.getValue()[1])).limit(2)
+                .forEach(e -> add("info", "jvm", "JVM handshake: " + e.getKey(),
+                        String.format(Locale.ROOT, "%d times, %s in total, longest %s. Handshakes stop threads one at a time, not the whole game; "
+                                + "the time is how long the slowest thread took to answer.", e.getValue()[0], Stats.ms(e.getValue()[1]), Stats.ms(e.getValue()[2])),
+                        "JFR VM-operation events without a safepoint (exact durations).", "jvm"));
+        vmHitchCauses();
+    }
+
+    /** Long VM operations not requested by the GC, with the deoptimisations and class definitions around them. */
+    private void vmHitchCauses() {
+        if (r.jfr.deopts.isEmpty() && r.jfr.classDefines.isEmpty()) return;
+        r.jfr.vmOperations.stream().filter(p -> !p.fromGc() && p.duration() >= 10_000_000L && !p.detail().contains("GC") && !p.detail().startsWith("Z"))
+                .sorted((a, b) -> Long.compare(b.duration(), a.duration())).limit(3).forEach(p -> {
+                    String d = VmHitch.explain(p, r.jfr.deopts, r.jfr.classDefines);
+                    if (d == null) return;
+                    boolean game = p.thread().equals("Render thread") || p.thread().equals("Server thread");
+                    add(game && p.duration() >= 50_000_000L ? "medium" : "low", "jvm",
+                            String.format(Locale.ROOT, "%s hitch %s: %s", p.thread(), Stats.ms(p.duration()), p.detail()), d,
+                            "JFR VM operation, with jdk.Deoptimization events from 100 ms before it and jdk.ClassDefine events from 500 ms before it until it ended.", "jvm");
+                });
     }
 
     private void blocking() {
@@ -470,6 +761,41 @@ final class Findings {
             add(total > 0.05 * r.durationNanos ? "high" : "medium", "jvm", thread + " blocked", d.toString(),
                     "JFR lock and park events over 5–10 ms, with stacks.", "jvm");
         }
+    }
+
+    /** Event listeners on the game threads, by mod, from the CPU samples. */
+    private void listeners() {
+        List<Listeners.Row> rows = Listeners.of(r);
+        for (String thread : new String[] {"Render thread", "Server thread"}) {
+            StringBuilder d = new StringBuilder();
+            double worst = 0, sum = 0;
+            int shown = 0;
+            for (Listeners.Row l : rows) {
+                if (!l.thread().equals(thread) || l.threadPct() < 0.5) continue;
+                sum += l.threadPct();
+                worst = Math.max(worst, l.threadPct());
+                if (shown < 6) {
+                    d.append(shown > 0 ? "; " : "").append(String.format(Locale.ROOT, "%s [%s] %.1f%% (%.2f ms per %s), on %s",
+                            shortName(l.listener()), l.mod(), l.threadPct(), l.ms(), thread.startsWith("Render") ? "frame" : "tick", shortName(l.event())));
+                }
+                shown++;
+            }
+            if (shown == 0) continue;
+            String what = thread.startsWith("Render") ? "frame" : "server tick";
+            add(worst >= 5 ? "medium" : "info", "cpu", String.format(Locale.ROOT, "Event listeners use %.0f%% of the %s", sum, thread.toLowerCase(Locale.ROOT)),
+                    "Mods react to game events (each " + what + ", each render stage, each entity) through NeoForge's event bus. The costliest listeners here: " + d
+                            + ". A listener that runs every " + what + " and takes a large share is worth reporting to its mod.",
+                    "JFR CPU samples whose stack passes through NeoForge's event bus, charged to the first method the bus called (time inside it included). Estimates.",
+                    "threads");
+        }
+    }
+
+    /** "pkg.Outer$Inner.method" as "Inner.method". */
+    private static String shortName(String label) {
+        int dot = label.lastIndexOf('.');
+        String cls = dot < 0 ? label : label.substring(0, dot);
+        int start = Math.max(cls.lastIndexOf('.'), cls.lastIndexOf('$')) + 1;
+        return label.substring(start);
     }
 
     private void threadsCpu() {

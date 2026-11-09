@@ -8,3 +8,5 @@ old-builds/
 .idea/
 *.lightning
 *.hprof
+scratch-notes/
+archive/

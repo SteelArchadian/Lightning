@@ -40,6 +40,8 @@ public final class SpanDigest implements EventFile.Visitor {
         long[] start = new long[1024];
         long[] duration = new long[1024];
         long[] gpu = new long[1024];
+        /** Open screen during the frame: its name id + 1, or 0 while playing (client frames only). */
+        int[] screen = new int[1024];
         int[] breakdownStart = new int[1025];
         int breakdownSize;
         int[] breakdownNode = new int[8192];
@@ -56,11 +58,13 @@ public final class SpanDigest implements EventFile.Visitor {
                 start = Arrays.copyOf(start, n);
                 duration = Arrays.copyOf(duration, n);
                 gpu = Arrays.copyOf(gpu, n);
+                screen = Arrays.copyOf(screen, n);
                 breakdownStart = Arrays.copyOf(breakdownStart, n + 1);
             }
             start[size] = time;
             duration[size] = -1;
             gpu[size] = -1;
+            screen[size] = 0;
             breakdownStart[size] = breakdownSize;
             return size++;
         }
@@ -102,6 +106,11 @@ public final class SpanDigest implements EventFile.Visitor {
         public long gpu(int i) {
             return gpu[i];
         }
+
+        /** Name id + 1 of the screen open during frame i, or 0 while playing. */
+        public int screen(int i) {
+            return screen[i];
+        }
     }
 
     /** Full record of one slow frame or tick. */
@@ -134,6 +143,10 @@ public final class SpanDigest implements EventFile.Visitor {
         long[] startStack = new long[260];
         boolean inTick;
         int tick = -1;
+        /** Last SCREEN payload seen on this thread. */
+        int screen;
+        /** True once any SCREEN event was seen (captures from older versions have none). */
+        public boolean screensKnown;
         long tickStart;
         // per-tick breakdown accumulation (node → slot) with generation stamps
         int[] slotOf = new int[256];
@@ -201,6 +214,11 @@ public final class SpanDigest implements EventFile.Visitor {
             case EventKind.TICK_END -> tickEnd(t, time);
             case EventKind.GPU -> gpu(t, seq, payload, time);
             case EventKind.LOSS -> loss(t);
+            case EventKind.SCREEN -> {
+                t.screen = payload;
+                t.screensKnown = true;
+                if (t.inTick && t.tick >= 0) t.ticks.screen[t.tick] = payload;
+            }
             default -> {}
         }
     }
@@ -225,7 +243,9 @@ public final class SpanDigest implements EventFile.Visitor {
     }
 
     private void push(ThreadSpans t, long seq, int nameId, long time) {
-        int parent = t.depth == 0 ? 0 : t.nodeStack[t.depth - 1];
+        // Past the stack limit (a mod that pushes without popping) new sections hang under the deepest tracked one.
+        int tracked = Math.min(t.depth, t.nodeStack.length);
+        int parent = tracked == 0 ? 0 : t.nodeStack[tracked - 1];
         int node = t.tree.child(parent, nameId);
         if (t.depth < t.nodeStack.length) {
             t.nodeStack[t.depth] = node;
@@ -301,6 +321,7 @@ public final class SpanDigest implements EventFile.Visitor {
         t.inTick = true;
         t.tickStart = time;
         t.tick = t.ticks.open(time);
+        t.ticks.screen[t.tick] = t.screen;
         t.spanCount = 0;
         t.spanOverflow = false;
         t.slots = 0;
@@ -317,11 +338,22 @@ public final class SpanDigest implements EventFile.Visitor {
         closeOpen(t, time);
         long duration = time - t.tickStart;
         Ticks ticks = t.ticks;
+        if (notGameplay(ticks.screen[t.tick])) {
+            // Leaving the world or loading a shader pack is not gameplay: keep the frame out of the statistics.
+            ticks.duration[t.tick] = -1;
+            ticks.breakdownStart[t.tick + 1] = ticks.breakdownSize;
+            t.inTick = false;
+            return;
+        }
         ticks.duration[t.tick] = duration;
         for (int i = 0; i < t.slots; i++) ticks.breakdown(t.slotNode[i], t.slotNanos[i]);
         ticks.breakdownStart[t.tick + 1] = ticks.breakdownSize;
         considerSpike(t, duration);
         t.inTick = false;
+    }
+
+    private boolean notGameplay(int screen) {
+        return screen > 0 && screen <= names.size() && names.get(screen - 1).startsWith(dev.lightning.capture.Track.NOT_GAMEPLAY);
     }
 
     private void considerSpike(ThreadSpans t, long duration) {

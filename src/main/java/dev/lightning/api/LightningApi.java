@@ -63,6 +63,10 @@ public final class LightningApi {
         if (!request.jfrSampling()) args.append("--no-jfr ");
         args.append(request.gpuSections() ? "--gpu sections " : "--gpu frame ");
         if (request.heapAtEnd()) args.append("--deep-memory ");
+        // Benchmarks also get a snapshot of what fills memory once recording has stopped, unless
+        // they list their parts themselves or -Dlightning.heap=false is set.
+        boolean listsParts = options != null && (options.contains("--only") || options.contains("--modules") || options.contains("heap"));
+        if (!listsParts && Boolean.parseBoolean(System.getProperty("lightning.heap", "true"))) args.append("--heap ");
         if (options != null && !options.isBlank()) args.append(options.trim());
         CaptureOptions parsed = CaptureOptions.parse(args.toString().trim());
         CaptureHandle handle = new CaptureHandle();

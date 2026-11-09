@@ -32,4 +32,24 @@ class HeapAnalyzerTest {
         assertTrue(report.contains("BigHolder"), "holder class not named");
         Files.writeString(Path.of(System.getProperty("lightning.testOutput", dir.toString()), "test-heap-report.txt"), report);
     }
+
+    @Test
+    void namesTheClassAndFieldThatHoldJdkMemory() throws Exception {
+        // Held only by JDK objects: System's properties map → a map node → 12 MB.
+        System.getProperties().put("lightning.test.big", new byte[12 << 20]);
+        try {
+            Path dump = dir.resolve("jdk.hprof");
+            ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class).dumpHeap(dump.toString(), true);
+            String report = new HeapAnalyzer(new ModIndex(), s -> {}).analyze(dump);
+            int at = report.indexOf("## What the JDK-held memory is");
+            assertTrue(at >= 0, "section missing");
+            String section = report.substring(at);
+            System.out.println(section.lines().limit(14).reduce("", (a, b) -> a + "\n" + b));
+            var m = java.util.regex.Pattern.compile("(?m)^\\s+([0-9.]+)\\s+[0-9,]+\\s+\\S*ConcurrentHashMap\\$Node\\.val → byte\\[\\]").matcher(section);
+            assertTrue(m.find(), "holder field not named");
+            assertTrue(Double.parseDouble(m.group(1)) >= 12, "row too small: " + m.group(1));
+        } finally {
+            System.getProperties().remove("lightning.test.big");
+        }
+    }
 }

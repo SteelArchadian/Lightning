@@ -30,19 +30,19 @@ final class WriterThread extends Thread {
                     if (finishing && capture.blocks.isEmpty()) break;
                     long now = System.nanoTime();
                     if (now - lastFlush > 1_000_000_000L) {
-                        writer.names(capture.names.snapshot());
+                        writer.names(capture.names);
                         writer.flush();
                         lastFlush = now;
                     }
                     LockSupport.parkNanos(10_000_000L);
                     continue;
                 }
-                writer.names(capture.names.snapshot());
+                writer.names(capture.names);
                 writer.block(block.track(), block.data(), block.length(), block.baseSeq());
                 capture.pool.give(block.data());
                 blocksWritten++;
             }
-            writer.names(capture.names.snapshot());
+            writer.names(capture.names);
         } catch (IOException e) {
             failure = e;
             // Keep draining so recording threads get their buffers back.
@@ -67,6 +67,11 @@ final class WriterThread extends Thread {
         LockSupport.unpark(this);
         join();
         if (failure != null) throw failure;
+    }
+
+    /** The write error that ended writing (disk full, file removed), or null. */
+    IOException failure() {
+        return failure;
     }
 
     long bytesWritten() {

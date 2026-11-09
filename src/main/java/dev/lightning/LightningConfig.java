@@ -59,7 +59,7 @@ public final class LightningConfig {
         CAPTURE_JOINS = b.comment("Record every world join, from the click until the world shows, to see what makes joining slow.")
                 .define("captureWorldJoins", false);
         CAPTURE_PARTS = b.comment("For automatic captures: record only these parts, comma-separated (gpu, render, ticks, world, cpu, alloc, gc, threads, io, heap, deep, load). Empty = everything. The JVM flag -Dlightning.capture wins.")
-                .define("captureParts", "");
+                .define("captureParts", "", LightningConfig::validParts);
         WINDOW_SECONDS = b.comment("Split every capture into phases of this many seconds (0 = off). The JVM flag -Dlightning.windows wins.")
                 .defineInRange("windowSeconds", 0, 0, 3600);
         b.pop();
@@ -74,5 +74,14 @@ public final class LightningConfig {
 
     public static boolean loaded() {
         return SPEC.isLoaded();
+    }
+
+    /** captureParts must be empty or a comma-separated list of known part names. */
+    public static boolean validParts(Object value) {
+        if (!(value instanceof String text)) return false;
+        for (String m : text.toLowerCase(java.util.Locale.ROOT).replace(" ", "").split("[,+]")) {
+            if (!m.isEmpty() && !dev.lightning.capture.CaptureOptions.MODULES.contains(m)) return false;
+        }
+        return true;
     }
 }

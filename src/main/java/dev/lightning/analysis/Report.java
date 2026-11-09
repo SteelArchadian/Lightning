@@ -132,6 +132,45 @@ public final class Report {
         return durationNanos <= 0 ? 0 : (double) (own + jfrCpu) / durationNanos;
     }
 
+    /** True if a screen or overlay was open during render frame i (a menu, not gameplay). */
+    public boolean menuFrame(int i) {
+        return render != null && render.ticks.screen(i) != 0;
+    }
+
+    private SlowFrames slow;
+    private boolean slowDone;
+
+    /** Slow gameplay frames compared with normal ones, or null when there are too few frames. */
+    SlowFrames slow() {
+        if (!slowDone) {
+            slowDone = true;
+            slow = SlowFrames.of(this);
+        }
+        return slow;
+    }
+
+    private SlowFrames slowTicks;
+    private boolean slowTicksDone;
+
+    /** Slow server ticks compared with normal ones, or null. */
+    SlowFrames slowTicks() {
+        if (!slowTicksDone) {
+            slowTicksDone = true;
+            slowTicks = SlowFrames.ofServer(this);
+        }
+        return slowTicks;
+    }
+
+    private List<ArrayOwners.Row> arrayOwners;
+
+    /** The memory snapshot's plain arrays split by allocating code (empty without snapshot or samples). */
+    List<ArrayOwners.Row> arrayOwners() {
+        if (arrayOwners == null) {
+            arrayOwners = data.heap() == null || jfr == null || jfr.oldSamples.isEmpty() ? List.of() : ArrayOwners.of(data.heap(), jfr.oldSamples);
+        }
+        return arrayOwners;
+    }
+
     private LoadDigest load;
     private boolean loadDone;
 

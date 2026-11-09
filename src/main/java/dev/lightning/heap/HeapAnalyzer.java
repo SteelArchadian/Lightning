@@ -667,6 +667,14 @@ public final class HeapAnalyzer {
         } catch (IOException | RuntimeException e) {
             files = "Could not describe file systems: " + e + "\n";
         }
+        Integer jdk = labelIds.get("JDK (no mod or game object holds it)");
+        if (jdk != null) {
+            try {
+                files += jdkHolders(label, jdk, idom, dfnum, root);
+            } catch (IOException | RuntimeException e) {
+                files += "Could not break down JDK-held memory: " + e + "\n";
+            }
+        }
         return report(total, unreachableBytes, charged, arraysByOwner, entries, labels, idom, retained, root, readNanos, System.nanoTime() - t0, rounds)
                 + files;
     }
@@ -903,6 +911,85 @@ public final class HeapAnalyzer {
                 b.append(String.format(Locale.ROOT, "%10.1f MB  (%.1f MB in memory, %d file systems)  %s%n",
                         e.getValue()[0] / 1048576.0, e.getValue()[1] / 1048576.0, e.getValue()[2], e.getKey())));
         return b.toString();
+    }
+
+    /**
+     * Memory charged to "JDK", by what holds it: the holding class and field, and the kind of
+     * object held (own size of each object, so the rows add up to the JDK total). Without this,
+     * "JDK" can't be assigned to anyone.
+     */
+    private String jdkHolders(int[] label, int jdk, int[] idom, int[] dfnum, int root) throws IOException {
+        Map<Long, long[]> pairs = new HashMap<>(); // (holder type + 1, 0 = several GC roots) << 32 | held type → {bytes, count, largest node}
+        long total = 0;
+        for (int v = 0; v < n; v++) {
+            if (dfnum[v] < 0 || label[v] != jdk) continue;
+            int h = idom[v] < 0 || idom[v] == v ? root : idom[v];
+            long key = ((long) (h == root ? 0 : type[h] + 1) << 32) | type[v];
+            long[] a = pairs.computeIfAbsent(key, k -> new long[] {0, 0, -1});
+            a[0] += size[v];
+            a[1]++;
+            if (a[2] < 0 || size[v] > size[(int) a[2]]) a[2] = v;
+            total += size[v];
+        }
+        if (total == 0) return "";
+        List<Map.Entry<Long, long[]>> top = pairs.entrySet().stream()
+                .sorted((x, y) -> Long.compare(y.getValue()[0], x.getValue()[0])).limit(8).toList();
+        // Read the holders of the largest object in each row to name the field that points to it.
+        wantInstances.clear();
+        wantArrays.clear();
+        for (var e : top) {
+            int v = (int) e.getValue()[2];
+            int h = idom[v];
+            if (h >= 0 && h != root && h != v && !typeNames.get(type[h]).endsWith("[]") && !typeNames.get(type[h]).startsWith("class object of ")
+                    && !keptData.containsKey(sortedIds[h])) wantInstances.add(sortedIds[h]);
+        }
+        if (!wantInstances.isEmpty()) {
+            progress.accept(String.format(Locale.ROOT, "reading %d JDK holders", wantInstances.size()));
+            fetchPass = true;
+            try (Hprof in = new Hprof(dumpPath)) {
+                in.header();
+                readFile(in, true);
+            } finally {
+                fetchPass = false;
+            }
+        }
+        StringBuilder b = new StringBuilder("\n## What the JDK-held memory is\n");
+        b.append(String.format(Locale.ROOT, "%.0f MB is held only by JDK objects. Top holders (class.field → object kind), by the objects' own size;%n"
+                        + "the field is the one holding the largest object of the row:%n%n",
+                total / 1048576.0));
+        b.append(String.format(Locale.ROOT, "%10s %12s  %s%n", "MB", "objects", "held by → kind"));
+        for (var e : top) {
+            long[] a = e.getValue();
+            int v = (int) a[2];
+            int ht = (int) (e.getKey() >>> 32) - 1;
+            String holder = ht < 0 ? "GC roots (several)" : shortName(typeNames.get(ht)) + holderField(idom[v], v);
+            b.append(String.format(Locale.ROOT, "%10.1f %,12d  %s → %s%n", a[0] / 1048576.0, a[1], holder, shortName(typeNames.get(type[v]))));
+        }
+        return b.toString();
+    }
+
+    /** ".field" of holder h that refers to v, "[]" for an array holder, ".(static)" for a class, or "" when unknown. */
+    private String holderField(int h, int v) {
+        if (h < 0 || h >= n) return "";
+        String name = typeNames.get(type[h]);
+        if (name.endsWith("[]")) return "[]";
+        if (name.startsWith("class object of ")) return ".(static)";
+        long hid = sortedIds[h];
+        byte[] d = keptData.get(hid);
+        if (d == null) return "";
+        int off = 0;
+        for (ClassDef k = classes.get(keptClass.get(hid)); k != null; k = classes.get(k.superId)) {
+            for (int i = 0; i < k.fieldTypes.length; i++) {
+                if (k.fieldTypes[i] == Hprof.T_OBJECT) {
+                    if (off + idSize <= d.length && readId(d, off) == sortedIds[v]) return "." + strings.get(k.fieldNames[i]);
+                    off += idSize;
+                } else {
+                    off += typeSizeStatic(k.fieldTypes[i]);
+                }
+            }
+            if (k.superId == 0) break;
+        }
+        return "";
     }
 
     private int reachableCount;

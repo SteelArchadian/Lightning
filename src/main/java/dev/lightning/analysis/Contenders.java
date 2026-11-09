@@ -61,14 +61,29 @@ final class Contenders {
     private void frameSpikes() {
         SpanDigest.ThreadSpans t = r.render;
         if (t == null || r.frames.count() < 30) return;
-        long threshold = Math.max((long) (r.frames.p50() * 2.5), r.frames.p50() + 10_000_000L);
-        int count = 0;
-        for (int i = 0; i < t.ticks.size(); i++) if (t.ticks.duration(i) > threshold) count++;
-        if (count == 0) return;
+        // Gameplay frames only: menus run at their own frame cap and may open windows (not lag).
+        SlowFrames slow = r.slow();
+        long p50 = slow != null ? slow.playP50 : r.frames.p50();
+        long threshold = Math.max((long) (p50 * 2.5), p50 + 10_000_000L);
+        int count = 0, menu = 0;
+        for (int i = 0; i < t.ticks.size(); i++) {
+            if (t.ticks.duration(i) <= threshold) continue;
+            if (r.menuFrame(i)) menu++;
+            else count++;
+        }
+        String menuNote = menu == 0 ? "" : f(" (%d more slow frames had a menu open and are not counted: %s)", menu, menuScreens(slow));
+        if (count == 0) {
+            if (menu > 0) {
+                add(f("Slow frames only in menus: %d", menu), "none while playing",
+                        "Every frame over " + ms(threshold) + " had a screen open (menus run at their own frame cap): " + menuScreens(slow) + ".",
+                        "Nothing to fix for gameplay; check the named screen if opening it is slow.", "frames", 0.05);
+            }
+            return;
+        }
         // What the slow frames had in common: the section most often dominating them.
         Map<Integer, Integer> culprits = new HashMap<>();
         for (SpanDigest.Spike s : t.spikes()) {
-            if (s.duration <= threshold) continue;
+            if (s.duration <= threshold || r.menuFrame(s.tick)) continue;
             int best = -1, bestDepth = -1;
             for (int i = 0; i < s.spans; i++) {
                 if (s.spanDuration[i] >= s.duration * 0.5 && s.depth[i] > bestDepth) {
@@ -78,14 +93,29 @@ final class Contenders {
             }
             if (best > 0) culprits.merge(best, 1, Integer::sum);
         }
-        String culprit = culprits.entrySet().stream().max(Map.Entry.comparingByValue())
-                .map(e -> "Most of them were stuck in \"" + friendly(r.path(t, e.getKey())) + "\".").orElse("They had no single common cause.");
+        // A section counts as the common cause only if it dominated at least half of the recorded stutters.
+        int recorded = culprits.values().stream().mapToInt(Integer::intValue).sum();
+        var common = culprits.entrySet().stream().max(Map.Entry.comparingByValue()).filter(e -> e.getValue() * 2 >= recorded);
+        String culprit = common.map(e -> "Most of them were stuck in \"" + friendly(r.path(t, e.getKey())) + "\".").orElse("They had no single common section.");
+        if (slow != null && !slow.verdict.isEmpty()) culprit += " " + slow.verdict;
+        else if (slow != null && !slow.sectionLine(slow.sections, 3).isEmpty()) culprit += " Slow frames spend extra time in " + slow.sectionLine(slow.sections, 3) + ".";
         double perMinute = count / r.seconds() * 60;
+        long worst = 0;
+        for (int i = 0; i < t.ticks.size(); i++) if (!r.menuFrame(i)) worst = Math.max(worst, t.ticks.duration(i));
         add(f("Stutters: %d frames took over %s", count, ms(threshold)),
-                f("%.0f per minute, worst %s", perMinute, ms(r.frames.max())),
-                "Each one is a visible hitch. " + culprit,
+                f("%.0f per minute, worst %s", perMinute, ms(worst)),
+                "Each one is a visible hitch. " + culprit + menuNote,
                 "Open Frames & ticks and click the tallest bars to see exactly what ran during each stutter.",
                 "frames", Math.min(1, perMinute / 30.0) * 0.9);
+    }
+
+    /** "EssentialScreenshotBrowser ×157, ..." from the slow-frame analysis, or "". */
+    private static String menuScreens(SlowFrames slow) {
+        if (slow == null) return "";
+        StringBuilder b = new StringBuilder();
+        slow.menuScreens.entrySet().stream().filter(e -> e.getValue()[1] > 0).sorted((a, c) -> c.getValue()[1] - a.getValue()[1]).limit(3)
+                .forEach(e -> b.append(b.length() == 0 ? "" : ", ").append(e.getKey()).append(" ×").append(e.getValue()[1]));
+        return b.toString();
     }
 
     private void frameHog() {
@@ -186,7 +216,9 @@ final class Contenders {
             String name = o[0];
             boolean base = name.startsWith("JDK") || name.startsWith("Minecraft") || name.startsWith("library") || name.startsWith("NeoForge")
                     || name.startsWith("unattributed") || name.startsWith("plain arrays");
-            if (base && !(name.startsWith("JDK") && deep != null && deep.contains("zipfs.ZipFileSystem"))) continue;
+            double jars = name.startsWith("JDK") ? openJarsMB(deep) : -1;
+            if (base && !(jars > 0)) continue;
+            if (jars > 0) mb = Math.min(mb, jars); // only the open jars, not everything else the JDK holds
             double share = mb * 1048576 / max;
             if (name.startsWith("JDK")) {
                 add("Mod files kept open in memory", f("about %.0f MB", mb),
@@ -200,6 +232,15 @@ final class Contenders {
             }
             if (++shown == 3) break;
         }
+    }
+
+    private static final java.util.regex.Pattern OPEN_JARS = java.util.regex.Pattern.compile("open jar file systems hold ([\\d.]+) MB");
+
+    /** MB held by open jar file systems, from the heap analysis's jar section; -1 when it has none. */
+    static double openJarsMB(String deep) {
+        if (deep == null) return -1;
+        java.util.regex.Matcher m = OPEN_JARS.matcher(deep);
+        return m.find() ? Double.parseDouble(m.group(1)) : -1;
     }
 
     private void memoryPressure() {
@@ -274,11 +315,9 @@ final class Contenders {
         for (var e : t.sectionStacks.entrySet()) {
             if ((int) (e.getKey() >>> 32) != node) continue;
             int leaf = (int) (long) e.getKey();
-            java.util.Set<String> seen = new java.util.HashSet<>();
-            for (int x = leaf; x > 0 && r.jfr.cpu.parent(x) > 0; x = r.jfr.cpu.parent(x)) {
-                String o = r.jfr.frames.owner(r.jfr.cpu.frame(x));
-                if (!JfrDigest.isBaseOwner(o) && seen.add(o)) owners.merge(o, e.getValue(), Integer::sum);
-            }
+            // Charge the mod whose code is running, so a wrapper around vanilla work isn't blamed for it.
+            String o = JfrDigest.ownCode(r.jfr.cpu, r.jfr.frames, leaf);
+            if (!JfrDigest.isBaseOwner(o)) owners.merge(o, e.getValue(), Integer::sum);
         }
         return owners.entrySet().stream().sorted(Map.Entry.<String, Integer>comparingByValue().reversed()).limit(3)
                 .map(Map.Entry::getKey).reduce((a, b) -> a + ", " + b).orElse("");

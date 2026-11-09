@@ -386,11 +386,17 @@ public final class Recorder {
             if (logs != null) logs.begin(c);
             step("metricsAndLogs");
             capture = c;
+            c.processesAtStart = OtherProcesses.snapshot();
             Capture.ACTIVE = c;
             metrics.sample();
             step("firstSample");
             LOG.info("Lightning capture {} started: {}", id, startSteps);
-            metricsTask = worker.scheduleAtFixedRate(metrics::sample, 1, 1, TimeUnit.SECONDS);
+            WriterThread w = writer;
+            metricsTask = worker.scheduleAtFixedRate(() -> {
+                metrics.sample();
+                // Nothing more can be saved once the event file can't be written (disk full): stop now and keep what is on disk.
+                if (w.failure() != null) stop(false);
+            }, 1, 1, TimeUnit.SECONDS);
             windowsTask = null;
             int window = Automation.windowSeconds();
             if (window > 0) {
@@ -427,10 +433,17 @@ public final class Recorder {
             if (windowsTask != null) windowsTask.cancel(false);
             if (wall != null) wall.stop();
             metrics.sample();
+            if (c.processesAtStart != null) c.otherPrograms = OtherProcesses.between(c.processesAtStart, OtherProcesses.snapshot());
             // Let threads that were inside a hook leave it before their buffers are collected.
             Thread.sleep(100);
             for (Track t : c.tracks()) t.flushFinal();
-            writer.finish();
+            try {
+                writer.finish();
+            } catch (IOException e) {
+                // The events written before the error are still readable; report on those.
+                LOG.warn("Lightning: could not write all recorded events; the report covers the part before the error", e);
+                listener.started("⚡ Could not write all recorded events (" + e.getMessage() + "); the report covers the part before that.");
+            }
             LogCapture logs = LogCapture.install();
             LogCapture.Snapshot logSnapshot = logs == null ? null : logs.snapshot();
             if (logs != null) logs.end();
@@ -473,7 +486,18 @@ public final class Recorder {
                     jfr == null ? 0 : jfr.setupNanos, jfrError, metrics.samples(), logSnapshot, environment.get(),
                     writer.bytesWritten(), jfrCpu.getOrDefault("jfrThreads", -1L), heap, deep, load);
             Analyzer.Result analysis = Analyzer.analyze(data);
-            Exporter.Result result = Exporter.export(analysis, outputDir != null ? outputDir : capturesDirectory(), exportViewer);
+            Exporter.Result result;
+            if (outputDir == null) {
+                result = Exporter.export(analysis, capturesDirectory(), exportViewer);
+            } else {
+                try {
+                    result = Exporter.export(analysis, outputDir, exportViewer);
+                } catch (IOException e) {
+                    // A mistyped or read-only -Dlightning.output folder must not cost the capture.
+                    LOG.warn("Lightning: could not save to " + outputDir + "; saving to " + capturesDirectory() + " instead", e);
+                    result = Exporter.export(analysis, capturesDirectory(), exportViewer);
+                }
+            }
             latest = result;
             deleteTree(tmp);
             capture = null;

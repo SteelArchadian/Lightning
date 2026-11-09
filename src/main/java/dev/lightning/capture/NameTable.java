@@ -22,6 +22,13 @@ public final class NameTable {
         }
     }
 
+    /** Names with ids from {@code from} on (empty when there are none), without copying the rest. */
+    public List<String> since(int from) {
+        synchronized (names) {
+            return from >= names.size() ? List.of() : List.copyOf(names.subList(from, names.size()));
+        }
+    }
+
     public List<String> snapshot() {
         synchronized (names) {
             return List.copyOf(names);

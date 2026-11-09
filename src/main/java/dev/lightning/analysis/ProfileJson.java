@@ -107,6 +107,14 @@ final class ProfileJson {
         w.name("irisPasses").value(dev.lightning.capture.CompatHooks.irisObserved);
         w.name("voxyLods").value(dev.lightning.capture.CompatHooks.voxyObserved);
         w.name("blockEntityHook").value(WorldHooks.blockEntityHookObserved);
+        // Hook errors caught so the game kept running (see Guard); missing when there were none.
+        var failures = dev.lightning.capture.Guard.failures();
+        if (!failures.isEmpty()) {
+            w.name("hookFailures").beginObject();
+            for (var e : failures.entrySet()) w.name(e.getKey()).value(e.getValue());
+            w.endObject();
+            if (dev.lightning.capture.Guard.worldDisabled) w.name("worldTimingDisabled").value(true);
+        }
         w.name("jfr").value(r.jfr != null ? "recorded" : r.data.jfrError() != null ? "unavailable: " + r.data.jfrError()
                 : r.jfrReadError != null ? "unreadable: " + r.jfrReadError : "off");
         GpuTimer gpu = r.gpu();
@@ -184,6 +192,7 @@ final class ProfileJson {
         w.beginObject();
         w.name("name").value(t.name);
         w.name("role").value(t == r.render ? "render" : t == r.server ? "server" : "other");
+        w.name("jvmSamples").value(t.samples == null ? 0 : t.samples.size());
         w.name("unmatchedPops").value(t.unmatchedPops);
         w.name("losses").value(t.losses);
         SpanTree tree = t.tree;
@@ -213,12 +222,36 @@ final class ProfileJson {
             longArray("start", start, ticks.size, 1);
             longArray("duration", ticks.duration, ticks.size, 1000);
             longArray("gpu", ticks.gpu, ticks.size, 1000);
-            intArray("breakdownStart", ticks.breakdownStart, ticks.size + 1);
-            intArray("breakdownNode", ticks.breakdownNode, ticks.breakdownSize);
-            longArray("breakdownUs", ticks.breakdownNanos, ticks.breakdownSize, 1000);
-            intArray("gpuTick", ticks.gpuTick, ticks.gpuSize);
-            intArray("gpuNode", ticks.gpuNode, ticks.gpuSize);
-            longArray("gpuUs", ticks.gpuNanos, ticks.gpuSize, 1000);
+            // Per-frame section times under 1 µs would be written as 0; leaving them out keeps every
+            // value the file can show and makes long captures about a third smaller.
+            int[] keptStart = new int[ticks.size + 1];
+            int[] keptNode = new int[ticks.breakdownSize];
+            long[] keptNanos = new long[ticks.breakdownSize];
+            int kept = 0;
+            for (int i = 0; i < ticks.size; i++) {
+                keptStart[i] = kept;
+                for (int b = ticks.breakdownStart[i]; b < ticks.breakdownStart[i + 1]; b++) {
+                    if (ticks.breakdownNanos[b] >= 0 && ticks.breakdownNanos[b] < 1000) continue;
+                    keptNode[kept] = ticks.breakdownNode[b];
+                    keptNanos[kept++] = ticks.breakdownNanos[b];
+                }
+            }
+            keptStart[ticks.size] = kept;
+            intArray("breakdownStart", keptStart, ticks.size + 1);
+            intArray("breakdownNode", keptNode, kept);
+            longArray("breakdownUs", keptNanos, kept, 1000);
+            int[] gpuTick = new int[ticks.gpuSize], gpuNode = new int[ticks.gpuSize];
+            long[] gpuNanos = new long[ticks.gpuSize];
+            int gpuKept = 0;
+            for (int g = 0; g < ticks.gpuSize; g++) {
+                if (ticks.gpuNanos[g] >= 0 && ticks.gpuNanos[g] < 1000) continue;
+                gpuTick[gpuKept] = ticks.gpuTick[g];
+                gpuNode[gpuKept] = ticks.gpuNode[g];
+                gpuNanos[gpuKept++] = ticks.gpuNanos[g];
+            }
+            intArray("gpuTick", gpuTick, gpuKept);
+            intArray("gpuNode", gpuNode, gpuKept);
+            longArray("gpuUs", gpuNanos, gpuKept, 1000);
             w.endObject();
             w.name("spikes").beginArray();
             for (SpanDigest.Spike s : t.spikes()) {
@@ -388,6 +421,8 @@ final class ProfileJson {
         w.name("cpu").value(j.cpuDescription);
         w.name("hwThreads").value(j.hwThreads);
         w.name("allocationBytesEstimate").value(j.allocationWeight);
+        w.name("allocationSamplesCapped").value(j.allocCappedSamples);
+        w.name("allocationBytesCapped").value(j.allocCappedBytes);
         w.name("frames").beginObject();
         w.name("label").beginArray();
         for (int i = 0; i < j.frames.size(); i++) w.value(j.frames.label(i));
@@ -403,6 +438,9 @@ final class ProfileJson {
         w.endArray();
         w.name("allocByMod").beginArray();
         j.allocByMod.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue().weight, a.getValue().weight)).limit(100).forEach(e -> row(e.getKey(), e.getValue()));
+        w.endArray();
+        w.name("allocOnStack").beginArray();
+        j.allocOnStack.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue().weight, a.getValue().weight)).limit(100).forEach(e -> row(e.getKey(), e.getValue()));
         w.endArray();
         w.name("pools").beginArray();
         for (var e : j.pools.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue().samples, a.getValue().samples)).toList()) {

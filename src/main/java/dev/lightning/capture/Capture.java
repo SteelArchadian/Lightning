@@ -28,6 +28,9 @@ public final class Capture {
     /** Offset to convert this JVM's nanoTime to epoch nanoseconds. */
     public final long epochOffsetNanos;
     volatile long stopNanos;
+    /** CPU time of every process at the start, and other programs' CPU over the capture (set when it stops). */
+    volatile OtherProcesses processesAtStart;
+    public volatile OtherProcesses.Usage otherPrograms;
 
     /** Phase marks: label and nanoTime, in order. */
     public record Mark(long nanos, String label) {}

@@ -94,6 +94,19 @@ final class JfrSession {
             s.put("jdk.ObjectAllocationSample#throttle", "150/s");
         }
 
+        if (options.heap()) {
+            // Objects still alive at the end, sampled with the stack that allocated them: tells whose
+            // plain arrays fill memory, which the class histogram can't. No path to GC roots (cutoff 0),
+            // so it stays cheap; the JVM keeps up to 256 samples.
+            enable(s, "jdk.OldObjectSample", true);
+            s.put("jdk.OldObjectSample#cutoff", "0 ns");
+            if (Boolean.getBoolean("lightning.bigAllocs")) {
+                // Opt-in: every allocation outside a thread's buffer, so the very large ones (G1's
+                // humongous objects, which need special collections) can be named. Costs an event per
+                // such allocation; the analysis keeps only the large ones.
+                enable(s, "jdk.ObjectAllocationOutsideTLAB", true);
+            }
+        }
         if (options.gc()) {
             // Memory management: collections, their pauses, and threads stalled waiting for memory.
             enable(s, "jdk.GarbageCollection", false);
@@ -103,12 +116,31 @@ final class JfrSession {
             enable(s, "jdk.ZAllocationStall", true);
             s.put("jdk.ZAllocationStall#threshold", "0 ms");
             enable(s, "jdk.GCHeapSummary", false);
+            // Why one collection was slow: its kind, failed evacuation (to-space exhausted), which
+            // phase took the time, reference processing. A few dozen small events per collection.
+            for (String gcDetail : new String[] {"jdk.G1GarbageCollection", "jdk.YoungGarbageCollection", "jdk.EvacuationFailed",
+                    "jdk.G1EvacuationYoungStatistics", "jdk.AllocationRequiringGC", "jdk.GCReferenceStatistics", "jdk.GCPhasePauseLevel1"}) {
+                enable(s, gcDetail, false);
+                s.put(gcDetail + "#threshold", "0 ms");
+            }
 
             // Whole-JVM pauses that are not GC (deoptimisation, thread dumps, class redefinition).
             enable(s, "jdk.ExecuteVMOperation", false);
             s.put("jdk.ExecuteVMOperation#threshold", "1 ms");
+            // Time to reach a safepoint (all threads stopped) is not part of the operation's duration:
+            // record every sync, and how many threads were still running when it began.
             enable(s, "jdk.SafepointBegin", false);
-            s.put("jdk.SafepointBegin#threshold", "1 ms");
+            s.put("jdk.SafepointBegin#threshold", "0 ms");
+            enable(s, "jdk.SafepointStateSynchronization", false);
+            s.put("jdk.SafepointStateSynchronization#threshold", "0 ms");
+            // What a long VM operation was doing: deoptimisations (often a class loaded mid-game
+            // invalidating compiled code) and classes defined around it. Rare outside start-up.
+            enable(s, "jdk.Deoptimization", false);
+            if (!options.loading()) {
+                enable(s, "jdk.ClassDefine", false);
+                enable(s, "jdk.Compilation", false);
+                s.put("jdk.Compilation#threshold", "5 ms");
+            }
         }
 
         if (options.cpu() || options.loading()) {

@@ -128,6 +128,18 @@ final class Summary {
             line(f("GPU time per frame (first to last command): median %.2f ms, p95 %.2f, max %.2f (%d frames measured).",
                     r.frameGpu.p50() / 1e6, r.frameGpu.p95() / 1e6, r.frameGpu.max() / 1e6, r.frameGpu.count()));
         }
+        var gpu = r.gpu();
+        if (gpu != null && gpu.lagCount() > 0) {
+            long[] lag = new long[gpu.lagCount()], gap = new long[gpu.lagCount()];
+            for (int i = 0; i < lag.length; i++) {
+                lag[i] = gpu.queueLagNanos(i);
+                gap[i] = gpu.frameGapNanos(i);
+            }
+            Stats l = Stats.of(lag, lag.length), g = Stats.of(gap, gap.length);
+            line(f("GPU queue lag (how long after submission the GPU reached a frame's first command; near 0 = the GPU waits for the CPU, large = GPU-bound): "
+                    + "median %.2f ms, p95 %.2f. GPU time between frames (swap, present and work outside the frame's sections, or idle): median %.2f ms.",
+                    l.p50() / 1e6, l.p95() / 1e6, g.p50() / 1e6));
+        }
         line("");
         sectionTable(t, s.count(), "frame", 45);
         sampledInside(t, "render thread");
@@ -261,7 +273,7 @@ final class Summary {
             if (self == 0 || cpu.parent(i) == 0) continue;
             int frame = cpu.frame(i);
             selfByMethod.merge(j.frames.label(frame) + " [" + j.frames.owner(frame) + "]", self, Long::sum);
-            selfByMod.merge(j.frames.owner(frame), self, Long::sum);
+            selfByMod.merge(JfrDigest.ownCode(cpu, j.frames, i), self, Long::sum);
             Set<String> owners = new HashSet<>();
             for (int n = i; n > 0 && cpu.parent(n) != 0; n = cpu.parent(n)) {
                 String owner = j.frames.owner(cpu.frame(n));
@@ -269,7 +281,7 @@ final class Summary {
             }
             for (String o : owners) inclusiveByMod.merge(o, self, Long::sum);
         }
-        line("Own (leaf) samples by owner: " + top(selfByMod, 12, all));
+        line("Samples by owner of the running code (a mod that only wraps vanilla code is not charged): " + top(selfByMod, 12, all));
         line("Samples with the owner anywhere on the stack: " + top(inclusiveByMod, 15, all));
         line("");
         line("Top methods by own samples:");
@@ -287,9 +299,9 @@ final class Summary {
             line("");
         }
         if (!j.vmOperations.isEmpty()) {
-            line("JVM-wide pauses over 1 ms (non-GC shown first):");
+            line("JVM operations over 1 ms (safepoint = every thread stopped; vm operation = handshake, one thread at a time):");
             j.vmOperations.stream().sorted((a, b) -> Long.compare(b.duration(), a.duration())).limit(8)
-                    .forEach(p -> line(f("- %s at %.2f s: %.2f ms (%s)", p.detail(), (p.time() - r.capture.startNanos) / 1e9, p.duration() / 1e6, p.kind())));
+                    .forEach(p -> line(f("- %s at %.2f s: %.2f ms (%s, requested by %s)", p.detail(), (p.time() - r.capture.startNanos) / 1e9, p.duration() / 1e6, p.kind(), p.thread())));
             line("");
         }
         if (!j.blocking.isEmpty()) {
@@ -345,7 +357,7 @@ final class Summary {
             }
             if (j.allocationWeight > 0) {
                 line(f("Estimated allocation: %.0f MB/s (sampled, weighted by size).", j.allocationWeight / r.seconds() / (1 << 20)));
-                line("Allocation by mod (innermost add-on mod on the stack, else the game):");
+                line("Allocation by mod (owner of the code that made the objects; a mod that only wraps vanilla code is not charged):");
                 j.allocByMod.entrySet().stream().sorted((a, b) -> Long.compare(b.getValue().weight, a.getValue().weight)).limit(15)
                         .forEach(e -> line(f("- %s %.0f MB/s (%.1f%%)", e.getKey(), e.getValue().weight / r.seconds() / (1 << 20), 100.0 * e.getValue().weight / j.allocationWeight)));
                 line("Top allocated types:");

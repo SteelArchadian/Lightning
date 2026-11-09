@@ -118,12 +118,16 @@ public final class Track {
     // --- sections -------------------------------------------------------------------------
 
     public void push(String name) {
+        push(name, false);
+    }
+
+    private void push(String name, boolean priority) {
         int id = nameId(name);
         long seq = emit(EventKind.PUSH, id, System.nanoTime());
         int d = depth;
         if (d < MAX_DEPTH) {
             GpuTimer g = gpu;
-            gpuMarked[d] = g != null && g.begin(this, d, id, seq);
+            gpuMarked[d] = g != null && g.begin(this, d, id, seq, priority);
         }
         depth = d + 1;
     }
@@ -136,7 +140,7 @@ public final class Track {
     private final boolean[] compat = new boolean[MAX_DEPTH];
 
     void pushCompat(String name) {
-        push(name);
+        push(name, true);
         int d = depth - 1;
         if (d >= 0 && d < MAX_DEPTH) compat[d] = true;
     }
@@ -167,6 +171,33 @@ public final class Track {
         }
         emit(EventKind.POP, 0, System.nanoTime());
         depth = Math.max(0, d);
+    }
+
+    /** Payload of the last SCREEN event, or -1 before the first. */
+    private int screen = -1;
+
+    /**
+     * Records the open screen (null = playing) when it differs from the last one, so frames can be
+     * told apart: menus run at their own frame cap and open windows, which is not gameplay lag.
+     */
+    /** Screen tags starting with this mark frames that are not gameplay; analysis leaves them out of the statistics. */
+    public static final String NOT_GAMEPLAY = "(not gameplay) ";
+    /** The frame that leaves the world (disconnect and save). */
+    public static final String LEAVING_WORLD = NOT_GAMEPLAY + "leaving world";
+    /** A frame that loads a shader pack or builds its pipeline (compiles every program). */
+    public static final String SHADER_LOAD = NOT_GAMEPLAY + "shader pack loading";
+
+    /** Tags the current frame of the calling thread's track as not gameplay, if a capture is running. */
+    public static void notGameplay(String tag) {
+        Track t = Capture.track();
+        if (t != null) t.screen(tag);
+    }
+
+    public void screen(String name) {
+        int payload = name == null ? 0 : nameId(name) + 1;
+        if (payload == screen) return;
+        screen = payload;
+        emit(EventKind.SCREEN, payload, System.nanoTime());
     }
 
     public void tickStart() {
@@ -244,7 +275,14 @@ public final class Track {
             suppliers.put(type, stats);
         }
         if (stats.collapsed) return stats.label;
-        String value = supplier.get();
+        String value;
+        try {
+            value = supplier.get();
+        } catch (RuntimeException e) {
+            // The no-op profiler never asks for these names; a mod's broken name must not crash it now.
+            Guard.failed("section name from " + type.getName(), e);
+            value = null;
+        }
         if (value == null) value = "(null)";
         if (!stats.seen.contains(value)) {
             if (stats.seen.size() >= SupplierStats.LIMIT) {

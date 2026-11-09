@@ -13,7 +13,7 @@ public final class WorldHooks {
 
     public static void entityStart() {
         Capture c = Capture.ACTIVE;
-        if (c == null || !c.options.world()) return;
+        if (c == null || !c.options.world() || Guard.worldDisabled) return;
         Track t = Capture.track();
         if (t == null) return;
         int d = t.entityDepth;
@@ -23,20 +23,24 @@ public final class WorldHooks {
 
     public static void entityEnd(Level level, Entity entity) {
         Capture c = Capture.ACTIVE;
-        if (c == null || !c.options.world()) return;
+        if (c == null || !c.options.world() || Guard.worldDisabled) return;
         long now = System.nanoTime();
         Track t = Capture.track();
         if (t == null || t.entityDepth == 0) return;
         int d = --t.entityDepth;
         if (d >= t.entityStart.length) return;
         if (!entityHookObserved) entityHookObserved = true;
-        t.world.entity(level, entity, now - t.entityStart[d]);
+        try {
+            t.world.entity(level, entity, now - t.entityStart[d]);
+        } catch (RuntimeException e) {
+            Guard.worldFailed("entity tick timing", e);
+        }
     }
 
     /** Called just before a block entity ticks. */
     public static long blockEntityStart() {
         Capture c = Capture.ACTIVE;
-        return c == null || !c.options.world() ? 0L : System.nanoTime();
+        return c == null || !c.options.world() || Guard.worldDisabled ? 0L : System.nanoTime();
     }
 
     public static void blockEntityEnd(Level level, TickingBlockEntity ticker, long start) {
@@ -45,6 +49,10 @@ public final class WorldHooks {
         Track t = Capture.track();
         if (t == null) return;
         if (!blockEntityHookObserved) blockEntityHookObserved = true;
-        t.world.blockEntity(level, ticker, now - start);
+        try {
+            t.world.blockEntity(level, ticker, now - start);
+        } catch (RuntimeException e) {
+            Guard.worldFailed("block entity tick timing", e);
+        }
     }
 }

@@ -29,17 +29,29 @@ public final class JfrDigest {
         long[] time = new long[256];
         int[] leaf = new int[256];
         boolean[] nativeSample = new boolean[256];
+        /** Index into {@link JfrDigest#poolNames} of the sampled thread's pool (allSamples only). */
+        int[] pool = new int[256];
         int size;
 
+        public int size() {
+            return size;
+        }
+
         void add(long t, int node, boolean isNative) {
+            add(t, node, isNative, 0);
+        }
+
+        void add(long t, int node, boolean isNative, int poolIndex) {
             if (size == time.length) {
                 time = java.util.Arrays.copyOf(time, size * 2);
                 leaf = java.util.Arrays.copyOf(leaf, size * 2);
                 nativeSample = java.util.Arrays.copyOf(nativeSample, size * 2);
+                pool = java.util.Arrays.copyOf(pool, size * 2);
             }
             time[size] = t;
             leaf[size] = node;
             nativeSample[size] = isNative;
+            pool[size] = poolIndex;
             size++;
         }
 
@@ -50,20 +62,81 @@ public final class JfrDigest {
             long[] t = new long[size];
             int[] l = new int[size];
             boolean[] n = new boolean[size];
+            int[] p = new int[size];
             for (int i = 0; i < size; i++) {
                 t[i] = time[order[i]];
                 l[i] = leaf[order[i]];
                 n[i] = nativeSample[order[i]];
+                p[i] = pool[order[i]];
             }
             time = t;
             leaf = l;
             nativeSample = n;
+            pool = p;
         }
     }
 
-    public record Gc(long time, long duration, String name, String cause, long sumOfPauses, long longestPause) {}
+    public record Gc(long time, long duration, String name, String cause, long sumOfPauses, long longestPause, int gcId) {}
 
-    public record Pause(long time, long duration, String thread, String kind, String detail, String stack) {}
+    /** G1 detail of one collection: kind, failed evacuation, slowest pause phase, references processed. */
+    static final class GcDetail {
+        String type = "";
+        boolean evacuationFailed;
+        /** Objects and bytes that could not be copied (summed: G1 reports one event per worker). */
+        long failedObjects, failedBytes;
+        String slowestPhase = "";
+        long slowestPhaseNanos;
+        int tenuring = -1;
+        final Map<String, Long> references = new java.util.LinkedHashMap<>();
+    }
+    final Map<Integer, GcDetail> gcDetails = new HashMap<>();
+
+    private GcDetail gcDetail(RecordedEvent e) {
+        return gcDetails.computeIfAbsent(e.getInt("gcId"), k -> new GcDetail());
+    }
+
+    public record Pause(long time, long duration, String thread, String kind, String detail, String stack) {
+        /** A VM operation at a safepoint: every Java thread is stopped while it runs. */
+        public boolean stopsAll() {
+            return kind.equals("safepoint");
+        }
+
+        /** Requested by a garbage collector thread (ZGC's concurrent handshakes, G1, Shenandoah). */
+        public boolean fromGc() {
+            return thread.startsWith("Z") || thread.startsWith("G1") || thread.startsWith("Shenandoah") || thread.startsWith("GC Thread");
+        }
+    }
+
+    /** One safepoint's synchronization: from the request until every Java thread had stopped. */
+    public record SafepointSync(long time, long duration, long id, int threads, int running, int iterations) {}
+    final List<SafepointSync> safepoints = new ArrayList<>();
+    /** safepointId → {threads still running when the sync began (initialThreadCount), iterations}, joined into {@link #safepoints} after reading. */
+    private final Map<Long, int[]> syncState = new HashMap<>();
+
+    /**
+     * Thread pools with Java samples during a safepoint wait, most samples first (Lightning and JFR
+     * left out). The late thread is among them when it was sampled, but samples alone can't single
+     * it out (others are caught on their way to the safepoint).
+     */
+    public Map<String, Integer> poolsBetween(long from, long to) {
+        Map<String, Integer> counts = new HashMap<>();
+        Samples s = allSamples;
+        int lo = 0, hi = s.size;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (s.time[mid] < from) lo = mid + 1;
+            else hi = mid;
+        }
+        for (int i = lo; i < s.size && s.time[i] <= to; i++) {
+            if (s.nativeSample[i]) continue;
+            String pool = poolNames.get(s.pool[i]);
+            if (pool.startsWith("Lightning") || pool.startsWith("JFR")) continue;
+            counts.merge(pool, 1, Integer::sum);
+        }
+        Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        counts.entrySet().stream().sorted((x, y) -> y.getValue() - x.getValue()).forEach(e -> out.put(e.getKey(), e.getValue()));
+        return out;
+    }
 
     public record CpuPoint(long time, double jvmUser, double jvmSystem, double machine) {}
 
@@ -85,7 +158,12 @@ public final class JfrDigest {
     final Map<String, ThreadCpu> threadCpu = new HashMap<>();
     final Map<String, Alloc> allocByClass = new HashMap<>();
     final Map<String, Alloc> allocBySite = new HashMap<>();
+    /** Allocation charged to the owner of the allocating code (innermost frame outside JDK and libraries). */
     final Map<String, Alloc> allocByMod = new HashMap<>();
+    /** Allocation with an add-on mod anywhere on the stack, charged to the innermost such mod (wrappers included). */
+    final Map<String, Alloc> allocOnStack = new HashMap<>();
+    /** Lock and park time on the game threads (ns, idle server waits excluded), charged to the owner of the waiting code. */
+    final Map<String, Long> waitByMod = new HashMap<>();
     /** Second (nanoTime / 1e9) → sampled allocation bytes. */
     final java.util.TreeMap<Long, Long> allocPerSecond = new java.util.TreeMap<>();
 
@@ -97,6 +175,9 @@ public final class JfrDigest {
     }
 
     final Map<String, PoolStats> pools = new HashMap<>();
+    /** Pool names by index, for {@link Samples#pool}. */
+    final List<String> poolNames = new ArrayList<>();
+    private final Map<String, Integer> poolIds = new HashMap<>();
 
     /** One per-thread CPU reading: time, thread pool, cores used by that thread. */
     public record ThreadCpuPoint(long time, String group, double cores) {}
@@ -108,11 +189,25 @@ public final class JfrDigest {
     private final Map<String, Integer> allocModIds = new HashMap<>();
     long[] allocTime = new long[1024];
     int[] allocMod = new int[1024];
+    /** Per sample: index into allocModNames of the innermost add-on mod on the stack, or -1. */
+    int[] allocStackMod = new int[1024];
     long[] allocWeightAt = new long[1024];
     int allocCount;
     final List<Gc> gcs = new ArrayList<>();
     final List<Pause> allocationStalls = new ArrayList<>();
     final List<Pause> vmOperations = new ArrayList<>();
+    /** Deoptimisations and class definitions (gameplay captures), to explain long VM operations. */
+    public record Deopt(long time, String thread, String method, String owner, String reason) {}
+
+    public record ClassDef(long time, String name, String owner) {}
+
+    /** An object still alive when recording stopped, sampled where it was allocated (jdk.OldObjectSample). */
+    public record OldSample(String className, long size, String site, String mod) {}
+    final List<OldSample> oldSamples = new ArrayList<>();
+
+    final List<Deopt> deopts = new ArrayList<>();
+    final List<ClassDef> classDefines = new ArrayList<>();
+    private static final int MAX_EXPLAIN = 50_000;
     final List<Pause> blocking = new ArrayList<>();
     final Map<String, long[]> blockingByGroup = new HashMap<>();
     final List<CpuPoint> cpuLoad = new ArrayList<>();
@@ -123,6 +218,9 @@ public final class JfrDigest {
     /** Second since the epoch of nanoTime → summed thread CPU load, in cores. */
     final java.util.TreeMap<Long, double[]> processCpu = new java.util.TreeMap<>();
     long allocationWeight;
+    /** Cap on one allocation sample's weight, and how many samples / bytes were cut by it. */
+    static final long MAX_ALLOC_WEIGHT = 1L << 30;
+    public long allocCappedSamples, allocCappedBytes;
     /** File and network waits (io module): "kind|target" → count, total, longest, time on game threads. */
     final Map<String, long[]> io = new HashMap<>();
     /** The slowest file/network waits on game threads, with stacks. */
@@ -136,8 +234,11 @@ public final class JfrDigest {
     private final Set<Long> gameThreads;
     private final int[] stackBuffer = new int[MAX_STACK + 1];
 
+    private final ModIndex mods;
+
     private JfrDigest(long epochOffset, ModIndex mods, Set<Long> gameThreads) {
         this.epochOffset = epochOffset;
+        this.mods = mods;
         this.frames = new FrameTable(mods);
         this.gameThreads = gameThreads;
     }
@@ -148,6 +249,13 @@ public final class JfrDigest {
             while (recording.hasMoreEvents()) d.accept(recording.readEvent());
         }
         for (Samples s : d.samplesByThread.values()) s.sort();
+        d.allSamples.sort();
+        for (int i = 0; i < d.safepoints.size(); i++) {
+            SafepointSync p = d.safepoints.get(i);
+            int[] st = d.syncState.get(p.id());
+            if (st != null) d.safepoints.set(i, new SafepointSync(p.time(), p.duration(), p.id(), p.threads(), st[0], st[1]));
+        }
+        d.safepoints.sort((a, b) -> Long.compare(a.time(), b.time()));
         return d;
     }
 
@@ -171,13 +279,37 @@ public final class JfrDigest {
             case "jdk.NativeMethodSample" -> sample(e, time, true);
             case "jdk.ObjectAllocationSample" -> allocation(e, time);
             case "jdk.GarbageCollection" -> gcs.add(new Gc(time, e.getDuration().toNanos(), e.getString("name"),
-                    e.getString("cause"), e.getDuration("sumOfPauses").toNanos(), e.getDuration("longestPause").toNanos()));
+                    e.getString("cause"), e.getDuration("sumOfPauses").toNanos(), e.getDuration("longestPause").toNanos(),
+                    e.hasField("gcId") ? e.getInt("gcId") : -1));
+            case "jdk.G1GarbageCollection" -> gcDetail(e).type = String.valueOf(e.getString("type"));
+            case "jdk.YoungGarbageCollection" -> gcDetail(e).tenuring = e.getInt("tenuringThreshold");
+            case "jdk.EvacuationFailed" -> {
+                GcDetail g = gcDetail(e);
+                g.evacuationFailed = true;
+                if (e.getValue("evacuationFailed") instanceof jdk.jfr.consumer.RecordedObject f) {
+                    if (f.hasField("objectCount")) g.failedObjects += f.getLong("objectCount");
+                    if (f.hasField("totalSize")) g.failedBytes += f.getLong("totalSize");
+                }
+            }
+            case "jdk.GCPhasePauseLevel1" -> {
+                GcDetail g = gcDetail(e);
+                long d = e.getDuration().toNanos();
+                if (d > g.slowestPhaseNanos) {
+                    g.slowestPhaseNanos = d;
+                    g.slowestPhase = String.valueOf(e.getString("name"));
+                }
+            }
+            case "jdk.GCReferenceStatistics" -> gcDetail(e).references.merge(String.valueOf(e.getString("type")), e.getLong("count"), Long::sum);
             case "jdk.ZAllocationStall" -> {
                 if (allocationStalls.size() < MAX_LISTED) {
                     allocationStalls.add(new Pause(time, e.getDuration().toNanos(), threadName(e.getThread()), "allocation stall",
                             e.hasField("type") ? String.valueOf((Object) e.getValue("type")) : "", ""));
                 }
             }
+            case "jdk.SafepointBegin" -> safepoints.add(new SafepointSync(time, e.getDuration().toNanos(), e.getLong("safepointId"),
+                    e.hasField("totalThreadCount") ? e.getInt("totalThreadCount") : -1, -1, -1));
+            case "jdk.SafepointStateSynchronization" -> syncState.put(e.getLong("safepointId"),
+                    new int[] {e.hasField("initialThreadCount") ? e.getInt("initialThreadCount") : e.getInt("runningThreadCount"), e.getInt("iterations")});
             case "jdk.ExecuteVMOperation" -> {
                 if (vmOperations.size() < MAX_LISTED) {
                     vmOperations.add(new Pause(time, e.getDuration().toNanos(), threadName(e.getThread("caller")),
@@ -215,6 +347,19 @@ public final class JfrDigest {
             }
             case "jdk.DataLoss" -> dataLossBytes += e.getLong("amount");
             case "jdk.ClassLoad" -> classLoad(e, time);
+            case "jdk.Deoptimization" -> {
+                if (deopts.size() < MAX_EXPLAIN && e.getValue("method") instanceof jdk.jfr.consumer.RecordedMethod m) {
+                    String cls = m.getType() == null ? "?" : m.getType().getName();
+                    deopts.add(new Deopt(time, threadName(e.getThread()), cls + "." + m.getName(), mods.ownerOfFrame(cls, m.getName()),
+                            e.hasField("reason") ? String.valueOf((Object) e.getValue("reason")) : "?"));
+                }
+            }
+            case "jdk.OldObjectSample" -> oldObject(e);
+            case "jdk.ObjectAllocationOutsideTLAB" -> outsideTlab(e);
+            case "jdk.ClassDefine" -> {
+                RecordedClass c = e.getClass("definedClass");
+                if (c != null && classDefines.size() < MAX_EXPLAIN) classDefines.add(new ClassDef(time, c.getName(), mods.ownerOfClass(c.getName())));
+            }
             case "jdk.FileRead", "jdk.FileWrite" -> io(e, time, e.getEventType().getName().endsWith("Read") ? "file read" : "file write",
                     e.hasField("path") ? e.getString("path") : "?");
             case "jdk.SocketRead", "jdk.SocketWrite" -> io(e, time, e.getEventType().getName().endsWith("Read") ? "network read" : "network write",
@@ -319,7 +464,13 @@ public final class JfrDigest {
         else executionSamples++;
         String pool = group(name);
         int leaf = cpu.add(frames.special("thread: " + pool), stackBuffer, count, 1);
-        allSamples.add(time, leaf, isNative);
+        Integer poolIndex = poolIds.get(pool);
+        if (poolIndex == null) {
+            poolIndex = poolNames.size();
+            poolNames.add(pool);
+            poolIds.put(pool, poolIndex);
+        }
+        allSamples.add(time, leaf, isNative, poolIndex);
         // Which mods' code runs on each thread pool (pools are often borrowed by other mods).
         PoolStats ps = pools.computeIfAbsent(pool, k -> new PoolStats());
         ps.samples++;
@@ -340,9 +491,154 @@ public final class JfrDigest {
                 || owner.equals("neoforge") || owner.equals("lwjgl") || owner.equals("unknown");
     }
 
+    /**
+     * Who an allocation sample is charged to, from its frame owners innermost first: [0] the owner of the
+     * allocating code (innermost frame outside the JDK and libraries, else "java"), and [1] the innermost
+     * add-on mod anywhere on the stack, or null. [0] is the headline: a mod that only passes calls through
+     * (a codec wrapper, a mixin or event hook around vanilla code) is not blamed for vanilla's allocation.
+     */
+    static String[] chargeAllocation(String[] ownersInnermostFirst) {
+        String site = null, onStack = null;
+        for (String owner : ownersInnermostFirst) {
+            if (site == null && !owner.isEmpty() && !owner.equals("java") && !owner.equals("library")) site = owner;
+            if (onStack == null && !isBaseOwner(owner)) onStack = owner;
+        }
+        return new String[] {site != null ? site : "java", onStack};
+    }
+
+    /** One allocating site of very large objects: {count, total bytes, largest bytes}. */
+    public record BigAlloc(String type, String site, String mod, long count, long bytes, long largest) {}
+    /** (type, site, mod) → {count, bytes, largest}, for allocations at or over {@link #bigThreshold}. */
+    final Map<String, long[]> bigAllocs = new HashMap<>();
+    /** Half a G1 region (the humongous threshold) in this JVM, else 4 MB. */
+    final long bigThreshold = humongousThreshold();
+    boolean outsideTlabSeen;
+
+    static long humongousThreshold() {
+        try {
+            var hs = java.lang.management.ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class);
+            if (Boolean.parseBoolean(hs.getVMOption("UseG1GC").getValue())) {
+                long region = Long.parseLong(hs.getVMOption("G1HeapRegionSize").getValue());
+                if (region > 0) return region / 2;
+            }
+        } catch (RuntimeException | LinkageError e) {
+            // not HotSpot, or the flag is missing: use the default below
+        }
+        return 4L << 20;
+    }
+
+    private void outsideTlab(RecordedEvent e) {
+        outsideTlabSeen = true;
+        long bytes = e.getLong("allocationSize");
+        if (bytes < bigThreshold) return;
+        RecordedClass type = e.getClass("objectClass");
+        String site = "(no stack)", mod = "java";
+        int count = frames(e.getStackTrace());
+        if (count > 0) {
+            site = frames.label(stackBuffer[count - 1]);
+            for (int i = count - 1; i >= 0; i--) {
+                String owner = frames.owner(stackBuffer[i]);
+                if (!owner.isEmpty() && !owner.equals("java") && !owner.equals("library")) {
+                    site = frames.label(stackBuffer[i]);
+                    mod = owner;
+                    break;
+                }
+            }
+        }
+        String name = type == null ? "?" : type.getName().startsWith("[") ? HeapHistogram.readable(type.getName()) : type.getName();
+        long[] a = bigAllocs.computeIfAbsent(name + '\u0000' + site + '\u0000' + mod, k -> new long[3]);
+        a[0]++;
+        a[1] += bytes;
+        a[2] = Math.max(a[2], bytes);
+    }
+
+    /** Large-allocation sites, most bytes first. */
+    public List<BigAlloc> bigAllocations() {
+        List<BigAlloc> out = new ArrayList<>();
+        for (var e : bigAllocs.entrySet()) {
+            String[] k = e.getKey().split("\u0000", 3);
+            out.add(new BigAlloc(k[0], k[1], k[2], e.getValue()[0], e.getValue()[1], e.getValue()[2]));
+        }
+        out.sort((x, y) -> Long.compare(y.bytes(), x.bytes()));
+        return out;
+    }
+
+    private void oldObject(RecordedEvent e) {
+        if (oldSamples.size() >= MAX_EXPLAIN || !(e.getValue("object") instanceof jdk.jfr.consumer.RecordedObject object)) return;
+        RecordedClass type = object.getClass("type");
+        if (type == null) return;
+        int count = frames(e.getStackTrace());
+        String site = "(no stack)", mod = "java";
+        if (count > 0) {
+            // The allocating code: innermost frame outside the JDK and libraries, else the innermost frame.
+            site = frames.label(stackBuffer[count - 1]);
+            for (int i = count - 1; i >= 0; i--) {
+                String owner = frames.owner(stackBuffer[i]);
+                if (!owner.isEmpty() && !owner.equals("java") && !owner.equals("library")) {
+                    site = frames.label(stackBuffer[i]);
+                    mod = owner;
+                    break;
+                }
+            }
+        }
+        long size = e.hasField("objectSize") ? e.getLong("objectSize") : 0;
+        if (size <= 0 && e.hasField("arrayElements")) size = arrayBytes(type.getName(), e.getInt("arrayElements"));
+        oldSamples.add(new OldSample(type.getName(), size, site, mod));
+    }
+
+    /**
+     * Size of an array from its element count (Java 21's OldObjectSample has no objectSize): a
+     * 16-byte header plus the elements, references at 4 bytes (compressed oops under 32 GB heaps).
+     * 0 when the object is not an array.
+     */
+    static long arrayBytes(String className, int elements) {
+        if (elements < 0 || className.length() < 2 || className.charAt(0) != '[') return 0;
+        int each = switch (className.charAt(1)) {
+            case 'Z', 'B' -> 1;
+            case 'C', 'S' -> 2;
+            case 'J', 'D' -> 8;
+            default -> 4;
+        };
+        return 16 + (long) elements * each;
+    }
+
+    /** The running code's frame at a CPU flame leaf (innermost frame outside the JDK and libraries), or -1. */
+    static int ownFrame(FlameTree tree, FrameTable frames, int leaf) {
+        for (int x = leaf; x > 0 && tree.parent(x) > 0; x = tree.parent(x)) {
+            String owner = frames.owner(tree.frame(x));
+            if (!owner.isEmpty() && !owner.equals("java") && !owner.equals("library")) return tree.frame(x);
+        }
+        return -1;
+    }
+
+    /** Owner of the running code at a CPU flame leaf: the innermost frame outside the JDK and libraries. */
+    static String ownCode(FlameTree tree, FrameTable frames, int leaf) {
+        List<String> owners = new ArrayList<>();
+        for (int x = leaf; x > 0 && tree.parent(x) > 0; x = tree.parent(x)) owners.add(frames.owner(tree.frame(x)));
+        return chargeAllocation(owners.toArray(new String[0]))[0];
+    }
+
+    private int allocModIndex(String name) {
+        Integer index = allocModIds.get(name);
+        if (index == null) {
+            index = allocModNames.size();
+            allocModNames.add(name);
+            allocModIds.put(name, index);
+        }
+        return index;
+    }
+
     private void allocation(RecordedEvent e, long time) {
         RecordedClass type = e.getClass("objectClass");
         long weight = e.getLong("weight");
+        // The weight is everything the thread allocated since its previous sample. After a long gap
+        // one sample can carry gigabytes and pin it all on whatever stack happened to be sampled
+        // (seen: 15.9 GB on one PoseStack.<init>), so cap it; capped samples are counted.
+        if (weight > MAX_ALLOC_WEIGHT) {
+            allocCappedSamples++;
+            allocCappedBytes += weight - MAX_ALLOC_WEIGHT;
+            weight = MAX_ALLOC_WEIGHT;
+        }
         allocationWeight += weight;
         allocPerSecond.merge(Math.floorDiv(time, 1_000_000_000L), weight, Long::sum);
         String typeName = type == null ? "(unknown)" : type.getName();
@@ -353,31 +649,30 @@ public final class JfrDigest {
         int count = frames(stack);
         if (count < 0) return;
         alloc.add(frames.special("thread: " + group(threadName(e.getThread("eventThread")))), stackBuffer, count, weight);
-        // Charge the allocation to the innermost add-on mod on the stack; otherwise to the innermost
-        // non-JDK owner (usually Minecraft itself).
-        String mod = null, fallback = null;
-        for (int i = count - 1; i >= 0; i--) {
-            String owner = frames.owner(stackBuffer[i]);
-            if (mod == null && !isBaseOwner(owner)) mod = owner;
-            if (fallback == null && !owner.equals("java") && !owner.equals("library") && !owner.isEmpty()) fallback = owner;
-        }
-        Alloc byMod = allocByMod.computeIfAbsent(mod != null ? mod : fallback != null ? fallback : "java", k -> new Alloc());
+        String[] owners = new String[count];
+        for (int i = 0; i < count; i++) owners[i] = frames.owner(stackBuffer[count - 1 - i]);
+        String[] charged = chargeAllocation(owners);
+        String modName = charged[0];
+        Alloc byMod = allocByMod.computeIfAbsent(modName, k -> new Alloc());
         byMod.samples++;
         byMod.weight += weight;
-        String modName = mod != null ? mod : fallback != null ? fallback : "java";
-        Integer modIndex = allocModIds.get(modName);
-        if (modIndex == null) {
-            modIndex = allocModNames.size();
-            allocModNames.add(modName);
-            allocModIds.put(modName, modIndex);
+        int stackIndex = -1;
+        if (charged[1] != null) {
+            Alloc onStack = allocOnStack.computeIfAbsent(charged[1], k -> new Alloc());
+            onStack.samples++;
+            onStack.weight += weight;
+            stackIndex = allocModIndex(charged[1]);
         }
+        int modIndex = allocModIndex(modName);
         if (allocCount == allocTime.length) {
             allocTime = java.util.Arrays.copyOf(allocTime, allocCount * 2);
             allocMod = java.util.Arrays.copyOf(allocMod, allocCount * 2);
+            allocStackMod = java.util.Arrays.copyOf(allocStackMod, allocCount * 2);
             allocWeightAt = java.util.Arrays.copyOf(allocWeightAt, allocCount * 2);
         }
         allocTime[allocCount] = time;
         allocMod[allocCount] = modIndex;
+        allocStackMod[allocCount] = stackIndex;
         allocWeightAt[allocCount] = weight;
         allocCount++;
         // The allocation site is the innermost frame outside the JDK and generic libraries.
@@ -407,10 +702,23 @@ public final class JfrDigest {
         // waits for chunk loads go through the same waitForTasks/managedBlock methods and are real
         // stalls. Matched by name anywhere on the stack because mods (e.g. ModernFix) wrap the wait.
         if (isIdleWait(e.getStackTrace())) kind = "idle wait";
+        // The frame limiter sleeping under the FPS cap (or in a menu) is by design, not contention;
+        // its share shows under frame pacing. Matched anywhere on the stack: mods wrap the limiter.
+        else if (inFrameLimiter(e.getStackTrace())) kind = FRAME_LIMITER;
+        // Waits on the render and server threads only: idle worker pools park all the time.
+        boolean idle = kind.equals("idle wait") || kind.equals(FRAME_LIMITER);
+        if (!idle && e.getStackTrace() != null && thread != null && gameThreads.contains(thread.getJavaThreadId())) {
+            List<String> owners = new ArrayList<>();
+            for (RecordedFrame frame : e.getStackTrace().getFrames()) {
+                RecordedMethod m = frame.getMethod();
+                if (m != null) owners.add(frames.owner(frames.method(m.getType().getName(), m.getName())));
+            }
+            waitByMod.merge(chargeAllocation(owners.toArray(new String[0]))[0], duration, Long::sum);
+        }
         long[] agg = blockingByGroup.computeIfAbsent(group(name) + "|" + kind, k -> new long[2]);
         agg[0]++;
         agg[1] += duration;
-        if (!kind.equals("idle wait") && thread != null && gameThreads.contains(thread.getJavaThreadId()) && blocking.size() < MAX_LISTED) {
+        if (!idle && thread != null && gameThreads.contains(thread.getJavaThreadId()) && blocking.size() < MAX_LISTED) {
             StringBuilder stack = new StringBuilder();
             RecordedStackTrace trace = e.getStackTrace();
             if (trace != null) {
@@ -428,6 +736,17 @@ public final class JfrDigest {
 
     private static final java.util.regex.Pattern IDLE_METHOD = java.util.regex.Pattern.compile(
             "waitUntilNextTick");
+
+    static final String FRAME_LIMITER = "frame limiter";
+
+    private static boolean inFrameLimiter(RecordedStackTrace trace) {
+        if (trace == null) return false;
+        for (RecordedFrame frame : trace.getFrames()) {
+            RecordedMethod m = frame.getMethod();
+            if (m != null && m.getName().equals("limitDisplayFPS")) return true;
+        }
+        return false;
+    }
 
     private static boolean isIdleWait(RecordedStackTrace trace) {
         if (trace == null) return false;

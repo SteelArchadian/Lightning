@@ -486,15 +486,8 @@ public final class LoadDigest {
             if (s.time[i] < start || s.time[i] >= until) continue;
             Phase p = phaseAt(s.time[i]);
             if (p == null) continue;
-            String owner = "";
-            for (int x = s.leaf[i]; x > 0 && j.cpu.parent(x) > 0; x = j.cpu.parent(x)) {
-                String o = j.frames.owner(j.cpu.frame(x));
-                if (!JfrDigest.isBaseOwner(o)) {
-                    owner = o;
-                    break;
-                }
-            }
-            if (owner.isEmpty()) owner = "(game, Java & libraries)";
+            String owner = JfrDigest.ownCode(j.cpu, j.frames, s.leaf[i]);
+            if (JfrDigest.isBaseOwner(owner)) owner = "(game, Java & libraries)";
             earlyOwners.computeIfAbsent(p.name, k -> new HashMap<>()).merge(owner, 1L, Long::sum);
             totals.merge(p.name, 1L, Long::sum);
         }
