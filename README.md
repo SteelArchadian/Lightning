@@ -27,6 +27,7 @@ To record every world join instead, turn on "Record world joins" in the config.
 
 Each recording is saved as a `.lightning` file (a zip with `profile.json`, `summary.md` and `results.json`)
 in `<game folder>/lightning/captures`, plus an HTML report.
+The report has a Simple / Technical switch in the corner: Simple shows only the plain-English summary and findings; Technical shows every tab, table and chart. Your choice is remembered.
 
 ## For other mods
 `dev.lightning.api.LightningApi` starts and stops recordings, marks phases and returns the saved files.
@@ -38,7 +39,4 @@ Java 21. `./gradlew build` (jar in `build/libs`). `./gradlew test` and `./gradle
 
 ## Licence
 LGPL-3.0-only — see [LICENSE](LICENSE) (the LGPL) and [COPYING](COPYING) (the GPL it builds on).
-You can use, change and share Lightning; changed versions of Lightning itself must stay open under the same licence. Made with AI assistance.
-
-## Feedback, bugs and feature ideas welcome
-This mod is actively developed, and your input shapes what comes next. Found a bug, have an idea for a feature, or think something could work better? **Please share it** in **[Issues](https://github.com/SteelArchadian/Lightning/issues)**. Every report and suggestion gets read, and feature requests are genuinely encouraged: good ideas get built.
+You can use, change and share Lightning; changed versions of Lightning itself must stay open under the same licence.

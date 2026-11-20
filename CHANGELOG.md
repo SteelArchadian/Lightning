@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.23-alpha
+- Report overview opens with a plain "How did it go?" sentence: how smooth the game was and the first thing to look at.
+
+## 0.5.22-alpha
+- Report has a Simple / Technical switch in the corner (remembered). Simple shows the plain-English overview and brief only; Technical shows every tab, table and chart.
+
 ## 0.5.21-alpha
 - Warns when other programs (another game, a build) use a lot of CPU during a capture; `results.machineLoad`.
 - Shows how long the game waits for threads to reach safepoints, which code ran during the longest waits, and how often slow frames overlap them (`results.safepoints`).

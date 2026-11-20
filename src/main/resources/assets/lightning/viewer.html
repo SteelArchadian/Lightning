@@ -59,6 +59,11 @@ section.tab.on { display: block; }
 .sev.high { background: var(--high); } .sev.medium { background: var(--medium); } .sev.low { background: var(--low); } .sev.info { background: var(--info); }
 .finding .t { font-weight: 600; } .finding .b { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .finding a { color: var(--accent-ink); cursor: pointer; font-size: 12.5px; }
+#mode { margin-left: auto; display: flex; gap: 2px; background: var(--soft); border-radius: 8px; padding: 2px; }
+#mode button { background: none; border: 0; color: var(--muted); padding: 4px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12.5px; }
+#mode button.on { background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+body.simple .tech, body.simple .finding .b { display: none; }
+body.simple nav button:not([data-tab=overview]):not([data-tab=brief]) { display: none; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th { color: var(--muted); font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--panel); }
@@ -97,6 +102,7 @@ pre.md { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; bac
 <header>
   <h1><span class="bolt">⚡</span> Lightning <span class="meta" id="hdr"></span></h1>
   <nav id="nav"></nav>
+  <div id="mode" title="Simple: plain explanations only. Technical: every table, chart and measurement basis."><button data-m="simple">Simple</button><button data-m="tech">Technical</button></div>
 </header>
 <main id="main">
   <div id="drop">Loading…</div>
@@ -263,7 +269,17 @@ function start(data) {
     main.append(h("section", { class: "tab", id: "tab-" + id }));
     nav.append(h("button", { "data-tab": id, onclick: () => go(id) }, label));
   }
+  setMode(storedMode());
+  for (const b of $("#mode").children) b.onclick = () => setMode(b.dataset.m);
   go(location.hash.slice(1).split(":")[0] || "overview");
+}
+function storedMode() { try { return localStorage.getItem("lightning.mode") === "tech" ? "tech" : "simple"; } catch (e) { return "simple"; } }
+function setMode(m) {
+  document.body.classList.toggle("simple", m === "simple");
+  for (const b of $("#mode").children) b.classList.toggle("on", b.dataset.m === m);
+  try { localStorage.setItem("lightning.mode", m); } catch (e) { /* private window */ }
+  const on = document.querySelector("#nav button.on");
+  if (m === "simple" && on && on.dataset.tab !== "overview" && on.dataset.tab !== "brief") go("overview");
 }
 function go(id, arg) {
   if (!TABS.find(t => t[0] === id)) id = "overview";
@@ -286,7 +302,21 @@ function follow(link) {
 // ---------------------------------------------------------------------------------------------
 const VIEWS = {};
 
+// One plain sentence for ordinary players: how the game felt, and what to look at first.
+function plainVerdict() {
+  const r = D.render;
+  if (!r || !r.count) return "Not enough gameplay was recorded to say how smooth the game was.";
+  const fps = r.count / (D.durationUs / 1e6), worst = 1e6 / Math.max(1, r.pct(0.99));
+  const feel = worst >= 50 ? "smooth" : worst >= 30 ? "mostly smooth, with some small stutters" : worst >= 20 ? "noticeably choppy at times" : "very choppy";
+  let t = `Your game ran ${feel}: about ${fps.toFixed(0)} frames per second on average, and the slowest 1 in 100 frames dropped to about ${worst.toFixed(0)}.`;
+  const c = D.contenders && D.contenders[0];
+  if (c) t += ` The biggest thing to look at first: ${c.title}.`;
+  else t += " Nothing stood out as a big problem.";
+  return t;
+}
+
 VIEWS.overview = el => {
+  el.append(h("div", { class: "card" }, h("h2", {}, "How did it go?"), h("div", { class: "lead", style: "margin:0" }, plainVerdict())));
   if (D.contenders && D.contenders.length) {
     el.append(h("h2", { style: "margin:4px 0 2px;font-size:20px" }, "Your biggest contenders"),
       h("div", { class: "lead" }, "What is costing your game the most in this recording, biggest first. Click through for the evidence; the tabs above have every detail."));
@@ -304,7 +334,7 @@ VIEWS.overview = el => {
   }
   el.append(h("h3", {}, "At a glance"));
   const kpis = h("div", { class: "kpis" });
-  const add = (v, l, title) => kpis.append(h("div", { class: "kpi", title: title || "" }, h("div", { class: "v" }, v), h("div", { class: "l" }, l)));
+  const add = (v, l, title) => kpis.append(h("div", { class: "kpi" + (/percentile|alloc/.test(l) ? " tech" : ""), title: title || "" }, h("div", { class: "v" }, v), h("div", { class: "l" }, l)));
   const r = D.render, s = D.server;
   if (r && r.count) {
     add((r.count / (D.durationUs / 1e6)).toFixed(0), "frames per second (mean)");
@@ -328,7 +358,7 @@ VIEWS.overview = el => {
     const t = h("table");
     sortable(t, D.phases.slice(), [{ label: "Phase", value: r => r.from, sort: "desc" }, { label: "seconds", value: r => r.to - r.from }, { label: "FPS", value: r => r.fps }, { label: "frame p50 ms", value: r => r.frameP50 }, { label: "frame p99 ms", value: r => r.frameP99 }, { label: "tick p50 ms", value: r => r.tickP50 }, { label: "memory waits", value: r => r.stalls }, { label: "alloc MB/s", value: r => r.allocMBps }, { label: "in use MB", value: r => r.liveP50 }],
       r => h("tr", {}, h("td", { class: "name" }, r.label), h("td", {}, ((r.to - r.from) / 1e6).toFixed(0)), h("td", {}, r.fps.toFixed(0)), h("td", {}, fmtMs(r.frameP50)), h("td", {}, fmtMs(r.frameP99)), h("td", {}, fmtMs(r.tickP50)), h("td", {}, `${r.stalls} (${fmtMs(r.stallUs)} ms)`), h("td", {}, r.allocMBps.toFixed(0)), h("td", {}, (r.liveP50 / 1048576).toFixed(0))));
-    el.append(h("div", { class: "card" }, h("h2", {}, "Phases"), h("div", { class: "hint" }, "Split at each /lightning mark."), t));
+    el.append(h("div", { class: "card tech" }, h("h2", {}, "Phases"), h("div", { class: "hint" }, "Split at each /lightning mark."), t));
   }
   const card = h("div", { class: "card" }, h("h2", {}, "All findings (detailed)"));
   if (!D.findings.length) card.append(h("div", { class: "empty" }, "Nothing notable was found."));
@@ -340,7 +370,7 @@ VIEWS.overview = el => {
   }
   el.append(card);
   if (r && r.ticks) {
-    const c = h("div", { class: "card" }, h("h2", {}, "Frame time over the capture"), h("div", { class: "hint" }, "Stacked by where the render thread spent each frame. Click the Frames tab to inspect individual spikes."));
+    const c = h("div", { class: "card tech" }, h("h2", {}, "Frame time over the capture"), h("div", { class: "hint" }, "Stacked by where the render thread spent each frame. Click the Frames tab to inspect individual spikes."));
     el.append(c);
     frameChart(c, r, 220, null);
   }
